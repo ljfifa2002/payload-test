@@ -1,0 +1,206 @@
+#include "hooks.h"
+#include <jni.h>
+#include <android/log.h>
+#include <lsplant.hpp>
+
+#define TAG "payload"
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
+
+// Check and clear pending exception; return true if exception occurred.
+static bool check_exception(JNIEnv* env, const char* ctx) {
+    if (env->ExceptionCheck()) {
+        LOGE("hooks: exception in %s", ctx);
+        env->ExceptionDescribe();
+        env->ExceptionClear();
+        return true;
+    }
+    return false;
+}
+
+// Load hooker.dex from /data/local/tmp, return HookerBridge class or nullptr.
+static jclass load_hooker_class(JNIEnv* env) {
+    // Use DexClassLoader via JNI reflection
+    jclass cl_class = env->FindClass("dalvik/system/DexClassLoader");
+    if (check_exception(env, "FindClass DexClassLoader") || cl_class == nullptr) return nullptr;
+
+    jmethodID cl_ctor = env->GetMethodID(cl_class, "<init>",
+        "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V");
+    if (check_exception(env, "GetMethodID DexClassLoader.<init>") || cl_ctor == nullptr) return nullptr;
+
+    // Parent classloader: current thread's context classloader
+    jclass thread_class = env->FindClass("java/lang/Thread");
+    jmethodID current_thread = env->GetStaticMethodID(thread_class, "currentThread", "()Ljava/lang/Thread;");
+    jmethodID get_context_cl = env->GetMethodID(thread_class, "getContextClassLoader", "()Ljava/lang/ClassLoader;");
+    jobject cur_thread = env->CallStaticObjectMethod(thread_class, current_thread);
+    jobject parent_cl = env->CallObjectMethod(cur_thread, get_context_cl);
+    if (check_exception(env, "getContextClassLoader")) parent_cl = nullptr;
+
+    jstring dex_path = env->NewStringUTF("/data/local/tmp/hooker.dex");
+    // optimizedDirectory is ignored on API 26+; use null
+    jobject dex_cl = env->NewObject(cl_class, cl_ctor,
+        dex_path, nullptr, nullptr, parent_cl);
+    if (check_exception(env, "new DexClassLoader") || dex_cl == nullptr) {
+        LOGE("hooks: DexClassLoader construction failed");
+        return nullptr;
+    }
+
+    // classLoader.loadClass("com.pecker.payload.HookerBridge")
+    jmethodID load_class = env->GetMethodID(cl_class, "loadClass",
+        "(Ljava/lang/String;)Ljava/lang/Class;");
+    jstring class_name = env->NewStringUTF("com.pecker.payload.HookerBridge");
+    jclass hooker_class = static_cast<jclass>(
+        env->CallObjectMethod(dex_cl, load_class, class_name));
+    if (check_exception(env, "loadClass HookerBridge") || hooker_class == nullptr) {
+        LOGE("hooks: loadClass HookerBridge failed");
+        return nullptr;
+    }
+
+    return hooker_class;
+}
+
+// Create a HookerBridge instance.
+static jobject create_hooker(JNIEnv* env, jclass hooker_class) {
+    jmethodID ctor = env->GetMethodID(hooker_class, "<init>", "()V");
+    if (check_exception(env, "GetMethodID HookerBridge.<init>") || ctor == nullptr) return nullptr;
+    jobject obj = env->NewObject(hooker_class, ctor);
+    if (check_exception(env, "NewObject HookerBridge")) return nullptr;
+    return obj;
+}
+
+// Install a single hook and store the backup in the hooker's field.
+// target_class_name: JNI class name (e.g. "android/telephony/TelephonyManager")
+// target_method_name: method name
+// target_sig: JNI method descriptor for target
+// callback_name: method name on HookerBridge
+// callback_sig: JNI descriptor for callback (includes hooker as first param)
+// backup_field: name of backup Method field on HookerBridge
+// is_static: whether target method is static
+static void hook_one(JNIEnv* env,
+                     jobject hooker_obj,
+                     jclass hooker_class,
+                     const char* target_class_name,
+                     const char* target_method_name,
+                     const char* target_sig,
+                     const char* callback_name,
+                     const char* callback_sig,
+                     const char* backup_field,
+                     bool is_static) {
+    // --- get target class ---
+    jclass target_class = env->FindClass(target_class_name);
+    if (check_exception(env, target_class_name) || target_class == nullptr) {
+        LOGE("hooks: FindClass failed: %s", target_class_name);
+        return;
+    }
+
+    // --- get target method as reflected Method ---
+    jobject target_method;
+    if (is_static) {
+        jmethodID mid = env->GetStaticMethodID(target_class, target_method_name, target_sig);
+        if (check_exception(env, target_method_name) || mid == nullptr) {
+            LOGE("hooks: GetStaticMethodID failed: %s %s", target_method_name, target_sig);
+            return;
+        }
+        target_method = env->ToReflectedMethod(target_class, mid, JNI_TRUE);
+    } else {
+        jmethodID mid = env->GetMethodID(target_class, target_method_name, target_sig);
+        if (check_exception(env, target_method_name) || mid == nullptr) {
+            LOGE("hooks: GetMethodID failed: %s %s", target_method_name, target_sig);
+            return;
+        }
+        target_method = env->ToReflectedMethod(target_class, mid, JNI_FALSE);
+    }
+    if (check_exception(env, "ToReflectedMethod") || target_method == nullptr) return;
+
+    // --- get callback method as reflected Method ---
+    jmethodID cb_mid = env->GetMethodID(hooker_class, callback_name, callback_sig);
+    if (check_exception(env, callback_name) || cb_mid == nullptr) {
+        LOGE("hooks: GetMethodID callback failed: %s %s", callback_name, callback_sig);
+        return;
+    }
+    jobject callback_method = env->ToReflectedMethod(hooker_class, cb_mid, JNI_FALSE);
+    if (check_exception(env, "ToReflectedMethod callback") || callback_method == nullptr) return;
+
+    // --- call lsplant::Hook ---
+    jobject backup = lsplant::Hook(env, target_method, hooker_obj, callback_method);
+    if (backup == nullptr) {
+        LOGE("hooks: lsplant::Hook failed for %s.%s", target_class_name, target_method_name);
+        return;
+    }
+    LOGI("hooks: hooked %s.%s", target_class_name, target_method_name);
+
+    // --- store backup in hooker field ---
+    jfieldID fid = env->GetFieldID(hooker_class, backup_field, "Ljava/lang/reflect/Method;");
+    if (check_exception(env, backup_field) || fid == nullptr) {
+        LOGE("hooks: GetFieldID failed: %s", backup_field);
+        return;
+    }
+    env->SetObjectField(hooker_obj, fid, backup);
+    check_exception(env, "SetObjectField backup");
+}
+
+void install_device_id_hooks(JNIEnv* env) {
+    jclass hooker_class = load_hooker_class(env);
+    if (hooker_class == nullptr) {
+        LOGE("hooks: load_hooker_class failed");
+        return;
+    }
+
+    jobject hooker_obj = create_hooker(env, hooker_class);
+    if (hooker_obj == nullptr) {
+        LOGE("hooks: create_hooker failed");
+        return;
+    }
+
+    // Keep hooker alive for the lifetime of the process
+    jobject hooker_global = env->NewGlobalRef(hooker_obj);
+    (void)hooker_global;
+
+    // 1. TelephonyManager.getDeviceId() -> String
+    hook_one(env, hooker_obj, hooker_class,
+        "android/telephony/TelephonyManager", "getDeviceId", "()Ljava/lang/String;",
+        "hookGetDeviceId", "(Ljava/lang/Object;)Ljava/lang/String;",
+        "backupGetDeviceId", false);
+
+    // 2. TelephonyManager.getSubscriberId() -> String
+    hook_one(env, hooker_obj, hooker_class,
+        "android/telephony/TelephonyManager", "getSubscriberId", "()Ljava/lang/String;",
+        "hookGetSubscriberId", "(Ljava/lang/Object;)Ljava/lang/String;",
+        "backupGetSubscriberId", false);
+
+    // 3. TelephonyManager.getSimSerialNumber() -> String
+    hook_one(env, hooker_obj, hooker_class,
+        "android/telephony/TelephonyManager", "getSimSerialNumber", "()Ljava/lang/String;",
+        "hookGetSimSerialNumber", "(Ljava/lang/Object;)Ljava/lang/String;",
+        "backupGetSimSerialNumber", false);
+
+    // 4. TelephonyManager.getLine1Number() -> String
+    hook_one(env, hooker_obj, hooker_class,
+        "android/telephony/TelephonyManager", "getLine1Number", "()Ljava/lang/String;",
+        "hookGetLine1Number", "(Ljava/lang/Object;)Ljava/lang/String;",
+        "backupGetLine1Number", false);
+
+    // 5. Settings.Secure.getString(ContentResolver, String) -> String  [static]
+    // Non-static callback: this=hooker_obj, explicit params=(cr, name) matching target's static params
+    hook_one(env, hooker_obj, hooker_class,
+        "android/provider/Settings$Secure",
+        "getString",
+        "(Landroid/content/ContentResolver;Ljava/lang/String;)Ljava/lang/String;",
+        "hookSettingsSecureGetString",
+        "(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/String;",
+        "backupSettingsSecureGetString", true);
+
+    // 6a. WifiInfo.getMacAddress() -> String
+    hook_one(env, hooker_obj, hooker_class,
+        "android/net/wifi/WifiInfo", "getMacAddress", "()Ljava/lang/String;",
+        "hookGetMacAddress", "(Ljava/lang/Object;)Ljava/lang/String;",
+        "backupWifiGetMacAddress", false);
+
+    // 6b. NetworkInterface.getHardwareAddress() -> byte[]
+    hook_one(env, hooker_obj, hooker_class,
+        "java/net/NetworkInterface", "getHardwareAddress", "()[B",
+        "hookGetHardwareAddress", "(Ljava/lang/Object;)[B",
+        "backupNetworkInterfaceGetHardwareAddress", false);
+
+    LOGI("hooks: device id hooks installed");
+}

@@ -4,7 +4,7 @@ project(payload)
 find_package(lsplant REQUIRED CONFIG)
 find_package(shadowhook REQUIRED CONFIG)
 
-add_library(payload SHARED main.cpp)
+add_library(payload SHARED main.cpp hooks.cpp)
 
 target_link_libraries(payload
     lsplant::lsplant

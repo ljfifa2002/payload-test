@@ -6,6 +6,7 @@
 #include <string_view>
 #include <shadowhook.h>
 #include <lsplant.hpp>
+#include "hooks.h"
 
 #define TAG "payload"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
@@ -77,5 +78,6 @@ static void payload_init() {
     }
     LOGI("lsplant::Init ok");
 
+    install_device_id_hooks(env);
     LOGI("payload init ok");
 }

@@ -48,6 +48,10 @@ jobs:
 
           ls -la app/build/outputs/payload-libs/arm64-v8a/
 
+          # hooker.dex is built by the buildHookerDex Gradle task (triggered by assembleRelease finalizedBy)
+          # It should already be in the output dir; verify
+          ls -la app/build/outputs/payload-libs/arm64-v8a/hooker.dex || echo "WARNING: hooker.dex not found"
+
       - name: Upload payload libs
         uses: actions/upload-artifact@v4
         with:
