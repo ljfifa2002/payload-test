@@ -30,14 +30,21 @@ jobs:
       - name: Collect dependency libs
         run: |
           mkdir -p app/build/outputs/payload-libs/arm64-v8a
-          cp app/build/intermediates/stripped_native_libs/release/**/arm64-v8a/libpayload.so \
-             app/build/outputs/payload-libs/arm64-v8a/ 2>/dev/null || \
+
+          # libpayload.so (stripped release)
           find app/build/intermediates/stripped_native_libs -name "libpayload.so" \
-             -exec cp {} app/build/outputs/payload-libs/arm64-v8a/ \;
-          find ~/.gradle/caches/transforms-4 -name "liblsplant.so" -path "*/arm64-v8a/*" \
-             | head -1 | xargs -I{} cp {} app/build/outputs/payload-libs/arm64-v8a/
+            -exec cp {} app/build/outputs/payload-libs/arm64-v8a/ \;
+
+          # liblsplant.so — download from Maven Central and extract
+          curl -sL "https://repo1.maven.org/maven2/org/lsposed/lsplant/lsplant-standalone/5.1/lsplant-standalone-5.1.aar" \
+            -o /tmp/lsplant.aar
+          unzip -p /tmp/lsplant.aar jni/arm64-v8a/liblsplant.so \
+            > app/build/outputs/payload-libs/arm64-v8a/liblsplant.so
+
+          # libshadowhook.so — from Gradle transforms cache
           find ~/.gradle/caches/transforms-4 -name "libshadowhook.so" -path "*/arm64-v8a/*" \
-             | head -1 | xargs -I{} cp {} app/build/outputs/payload-libs/arm64-v8a/
+            | head -1 | xargs -I{} cp {} app/build/outputs/payload-libs/arm64-v8a/
+
           ls -la app/build/outputs/payload-libs/arm64-v8a/
 
       - name: Upload payload libs
