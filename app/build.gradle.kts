@@ -24,6 +24,12 @@ android {
         prefab = true
     }
 
+    packaging {
+        jniLibs {
+            excludes += "**/riscv64/**"
+        }
+    }
+
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
