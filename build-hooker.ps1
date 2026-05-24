@@ -41,7 +41,7 @@ if (-not $D8) {
 Write-Host "[1/3] javac  HookerBridge.java"
 $ClassesDir = "$OutDir\classes"
 New-Item -ItemType Directory -Force $ClassesDir | Out-Null
-& javac -source 11 -target 11 -bootclasspath $AndroidJar -d $ClassesDir $JavaSrc
+& javac --release 11 -classpath $AndroidJar -d $ClassesDir $JavaSrc
 if ($LASTEXITCODE -ne 0) { Write-Error "javac 失败"; exit 1 }
 
 Write-Host "[2/3] d8  ->  hooker.dex"
