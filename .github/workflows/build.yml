@@ -56,7 +56,7 @@ jobs:
           echo "Using android.jar: $ANDROID_JAR"
           echo "Using d8: $D8"
 
-          mkdir -p /tmp/hooker_classes
+          mkdir -p /tmp/hooker_classes /tmp/hooker_out
           javac --release 11 \
                 -classpath "$ANDROID_JAR" \
                 -d /tmp/hooker_classes \
