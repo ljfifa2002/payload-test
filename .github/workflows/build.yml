@@ -36,7 +36,7 @@ jobs:
             -exec cp {} app/build/outputs/payload-libs/arm64-v8a/ \;
 
           # liblsplant.so — download from Maven Central and extract
-          curl -sL "https://repo1.maven.org/maven2/org/lsposed/lsplant/lsplant-standalone/5.1/lsplant-standalone-5.1.aar" \
+          curl -sL "https://repo1.maven.org/maven2/org/lsposed/lsplant/lsplant-standalone/6.4/lsplant-standalone-6.4.aar" \
             -o /tmp/lsplant.aar
           unzip -p /tmp/lsplant.aar \
             prefab/modules/lsplant/libs/android.arm64-v8a/liblsplant.so \
