@@ -1,0 +1,14 @@
+# Android build outputs
+app/build/
+build/
+.gradle/
+
+# Local properties (SDK path)
+local.properties
+
+# IDE files
+.idea/
+*.iml
+
+# macOS
+.DS_Store
