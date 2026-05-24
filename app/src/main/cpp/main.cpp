@@ -34,7 +34,7 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
 
     int sh_ret = shadowhook_init(SHADOWHOOK_MODE_UNIQUE, false);
     if (sh_ret != 0) {
-        LOGE("shadowhook_init failed errno=%d", shadowhook_get_init_errno());
+        LOGE("shadowhook_init failed ret=%d", sh_ret);
         return JNI_ERR;
     }
     LOGI("shadowhook_init ok");
