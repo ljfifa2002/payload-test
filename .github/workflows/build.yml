@@ -24,6 +24,26 @@ jobs:
       - name: Grant Gradle wrapper execute permission
         run: chmod +x gradlew
 
+      - name: Extract LSPlant 6.4 (headers + library before CMake runs)
+        run: |
+          curl -sL "https://repo1.maven.org/maven2/org/lsposed/lsplant/lsplant-standalone/6.4/lsplant-standalone-6.4.aar" \
+            -o /tmp/lsplant6.aar
+
+          # Headers — needed by CMake at configure time
+          mkdir -p app/src/main/cpp/lsplant/include
+          unzip -p /tmp/lsplant6.aar \
+            prefab/modules/lsplant/include/lsplant.hpp \
+            > app/src/main/cpp/lsplant/include/lsplant.hpp
+
+          # Library — needed by CMake at link time
+          mkdir -p app/src/main/jniLibs/arm64-v8a
+          unzip -p /tmp/lsplant6.aar \
+            prefab/modules/lsplant/libs/android.arm64-v8a/liblsplant.so \
+            > app/src/main/jniLibs/arm64-v8a/liblsplant.so
+
+          echo "LSPlant header: $(wc -c < app/src/main/cpp/lsplant/include/lsplant.hpp) bytes"
+          echo "LSPlant .so:    $(wc -c < app/src/main/jniLibs/arm64-v8a/liblsplant.so) bytes"
+
       - name: Build release
         run: ./gradlew assembleRelease
 
@@ -35,12 +55,9 @@ jobs:
           find app/build/intermediates/stripped_native_libs -name "libpayload.so" \
             -exec cp {} app/build/outputs/payload-libs/arm64-v8a/ \;
 
-          # liblsplant.so — download from Maven Central and extract
-          curl -sL "https://repo1.maven.org/maven2/org/lsposed/lsplant/lsplant-standalone/6.4/lsplant-standalone-6.4.aar" \
-            -o /tmp/lsplant.aar
-          unzip -p /tmp/lsplant.aar \
-            prefab/modules/lsplant/libs/android.arm64-v8a/liblsplant.so \
-            > app/build/outputs/payload-libs/arm64-v8a/liblsplant.so
+          # liblsplant.so — already extracted above
+          cp app/src/main/jniLibs/arm64-v8a/liblsplant.so \
+             app/build/outputs/payload-libs/arm64-v8a/liblsplant.so
 
           # libshadowhook.so — from Gradle transforms cache
           find ~/.gradle/caches/transforms-4 -name "libshadowhook.so" -path "*/arm64-v8a/*" \

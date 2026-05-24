@@ -21,13 +21,7 @@ android {
     }
 
     buildFeatures {
-        prefab = true
-    }
-
-    packaging {
-        jniLibs {
-            excludes += "**/riscv64/**"
-        }
+        prefab = true  // still needed for shadowhook
     }
 
     externalNativeBuild {
@@ -39,6 +33,6 @@ android {
 }
 
 dependencies {
-    implementation("org.lsposed.lsplant:lsplant-standalone:6.4")
+    // LSPlant removed from prefab — imported manually as prebuilt in CMakeLists.txt
     implementation("com.bytedance.android:shadowhook:1.0.9")
 }
