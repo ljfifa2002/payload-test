@@ -2,11 +2,15 @@
 #include <jni.h>
 #include <android/log.h>
 #include <dlfcn.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/mman.h>
 #include <shadowhook.h>
 #include <string>
 #include <vector>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 
 #define TAG "payload"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  TAG, __VA_ARGS__)
@@ -134,207 +138,214 @@ static void* get_entry_point(jmethodID mid) {
 }
 
 // ---------------------------------------------------------------------------
-// Per-method hook stubs
-// Oplus watchdog restores the ArtMethod field but never touches the code at
-// the address the field points to. Patching that code is invisible to the dog.
+// Raw patch via /proc/self/mem  (bypasses W^X on OAT pages)
 //
-// ART arm64 quick calling convention for instance methods:
-//   x0  = compressed 'this' reference
-//   x1..= further arguments
-//   x19 = ART Thread*   (callee-saved, ShadowHook preserves it)
-//   return in x0
+// Writes a 16-byte ARM64 absolute jump at `target`:
+//   LDR X17, #8   ; 0x58000051
+//   BR  X17       ; 0xD61F0220
+//   <hook_fn ptr> ; 8 bytes
 //
-// ShadowHook UNIQUE mode patches the prologue and provides a trampoline to
-// the original code.  The hook function is called with the same register
-// layout as a normal C function, which happens to match ART quick convention
-// for the argument registers — so cast is safe for logging purposes.
+// Allocates a 32-byte RWX trampoline:
+//   [0..15]  original 16 bytes of target
+//   [16..31] same abs jump → target+16  (so caller can invoke the original)
+//
+// Returns the trampoline (== "orig" pointer), or nullptr on failure.
 // ---------------------------------------------------------------------------
 
+static bool is_pc_relative(uint32_t insn) {
+    if ((insn & 0x7C000000) == 0x14000000) return true; // B/BL
+    if ((insn & 0x1F000000) == 0x10000000) return true; // ADR/ADRP
+    if ((insn & 0x7E000000) == 0x34000000) return true; // CBZ/CBNZ
+    if ((insn & 0x7E000000) == 0x36000000) return true; // TBZ/TBNZ
+    if ((insn & 0x3B000000) == 0x18000000) return true; // LDR literal
+    if ((insn & 0xFF000010) == 0x54000000) return true; // B.cond
+    return false;
+}
+
+static void* raw_patch(void* target, void* hook_fn) {
+    auto* code = reinterpret_cast<uint32_t*>(target);
+    for (int i = 0; i < 4; i++) {
+        if (is_pc_relative(code[i])) {
+            LOGE("art_hooks: raw_patch: PC-relative insn[%d]=0x%08x, skip", i, code[i]);
+            return nullptr;
+        }
+    }
+
+    // Allocate 32-byte RWX trampoline
+    void* tramp = mmap(nullptr, 32, PROT_READ | PROT_WRITE | PROT_EXEC,
+                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (tramp == MAP_FAILED) { LOGE("art_hooks: mmap tramp failed"); return nullptr; }
+
+    // tramp[0..15] = original bytes; tramp[16..31] = abs jump to target+16
+    memcpy(tramp, target, 16);
+    auto* tp = reinterpret_cast<uint8_t*>(tramp) + 16;
+    *reinterpret_cast<uint32_t*>(tp + 0) = 0x58000051; // LDR X17, #8
+    *reinterpret_cast<uint32_t*>(tp + 4) = 0xD61F0220; // BR  X17
+    *reinterpret_cast<uintptr_t*>(tp + 8) = reinterpret_cast<uintptr_t>(target) + 16;
+    __builtin___clear_cache(reinterpret_cast<char*>(tramp),
+                            reinterpret_cast<char*>(tramp) + 32);
+
+    // Write 16-byte abs jump to target via /proc/self/mem
+    uint8_t patch[16];
+    *reinterpret_cast<uint32_t*>(patch + 0) = 0x58000051; // LDR X17, #8
+    *reinterpret_cast<uint32_t*>(patch + 4) = 0xD61F0220; // BR  X17
+    *reinterpret_cast<uintptr_t*>(patch + 8) = reinterpret_cast<uintptr_t>(hook_fn);
+
+    int fd = open("/proc/self/mem", O_RDWR);
+    if (fd < 0) {
+        LOGE("art_hooks: open /proc/self/mem failed");
+        munmap(tramp, 32); return nullptr;
+    }
+    bool ok = (lseek(fd, reinterpret_cast<off_t>(target), SEEK_SET) >= 0 &&
+               write(fd, patch, 16) == 16);
+    close(fd);
+    if (!ok) {
+        LOGE("art_hooks: write to /proc/self/mem failed");
+        munmap(tramp, 32); return nullptr;
+    }
+    __builtin___clear_cache(reinterpret_cast<char*>(target),
+                            reinterpret_cast<char*>(target) + 16);
+    LOGI("art_hooks: raw_patch %p -> hook %p  tramp=%p", target, hook_fn, tramp);
+    return tramp;
+}
+
+// ---------------------------------------------------------------------------
+// JNI helpers
+// ---------------------------------------------------------------------------
 static JavaVM* g_vm = nullptr;
 
-// Safely attach to JNI for the current thread (if needed) and return env.
-// Returns JNI_OK or an error code; sets *env_out.
 static int get_env(JNIEnv** env_out) {
     if (!g_vm) return JNI_ERR;
     jint r = g_vm->GetEnv(reinterpret_cast<void**>(env_out), JNI_VERSION_1_6);
-    if (r == JNI_EDETACHED) {
-        r = g_vm->AttachCurrentThread(env_out, nullptr);
-    }
+    if (r == JNI_EDETACHED) r = g_vm->AttachCurrentThread(env_out, nullptr);
     return r;
 }
 
-// Emit a log line in the standard hook output format.
 static void emit(const char* method, const char* data) {
     LOGI("{\"type\":\"behavior\",\"method\":\"%s\",\"data\":\"%s\"}", method, data);
 }
 
-// Try to read a jstring value returned from the trampoline (x0 after call).
-// ART returns object references in x0 as uncompressed pointer on arm64.
-// We wrap it in a local JNI reference so GC is aware.
+// Convert a raw ART heap reference (returned from compiled code) to std::string.
+// Wrapped in ExceptionCheck in case the pointer is not a valid String.
 static std::string jstring_val(JNIEnv* env, void* raw_ref) {
-    if (!raw_ref || !env) return "(null)";
-    // On arm64 ART, the raw pointer IS the object address — NewLocalRef is safe.
+    if (!raw_ref || !env) return "";
     auto jstr = reinterpret_cast<jstring>(raw_ref);
+    // NewLocalRef promotes raw heap pointer to a proper JNI local ref
     jstring local = static_cast<jstring>(env->NewLocalRef(jstr));
-    if (!local) return "(null)";
+    if (!local || env->ExceptionCheck()) { env->ExceptionClear(); return ""; }
     const char* cstr = env->GetStringUTFChars(local, nullptr);
-    std::string result = cstr ? cstr : "(null)";
+    if (env->ExceptionCheck()) { env->ExceptionClear(); env->DeleteLocalRef(local); return ""; }
+    std::string result = cstr ? cstr : "";
     if (cstr) env->ReleaseStringUTFChars(local, cstr);
     env->DeleteLocalRef(local);
     return result;
 }
 
 // ---------------------------------------------------------------------------
-// HOOK_METHOD macro:
-//   Declares orig_<tag> + stub_<tag> statics and a hook function.
-//   The hook logs the call, invokes the original, logs the return value.
-//   RESULT_FN extracts a display string from the raw return value; for void
-//   methods pass a lambda returning empty string.
+// Hook functions — call orig directly (no ShadowHook macros needed)
+// orig_X is set to the trampoline by install_one before any call can arrive.
 // ---------------------------------------------------------------------------
 
-#define HOOK_METHOD(tag, method_label, RetT, ...)                              \
-    using Fn_##tag = RetT (*)(__VA_ARGS__);                                    \
-    static void*     stub_##tag = nullptr;                                     \
-    static Fn_##tag  orig_##tag = nullptr;                                     \
-    static RetT hook_##tag(__VA_ARGS__);                                       \
-    static RetT hook_##tag(__VA_ARGS__)
+using FnVoidRet = void*(*)(void*);
+using FnTwoArg  = void*(*)(void*, void*);
 
-// ---------------------------------------------------------------------------
-// TelephonyManager.getDeviceId() -> String   [instance, no-arg]
-// ---------------------------------------------------------------------------
-HOOK_METHOD(getDeviceId, "TelephonyManager.getDeviceId", void*, void* thiz) {
-    SHADOWHOOK_STACK_SCOPE();
-    void* ret = SHADOWHOOK_CALL_PREV(hook_getDeviceId, thiz);
+static FnVoidRet orig_getDeviceId       = nullptr;
+static FnVoidRet orig_getSubscriberId   = nullptr;
+static FnVoidRet orig_getSimSerialNumber= nullptr;
+static FnVoidRet orig_getLine1Number    = nullptr;
+static FnTwoArg  orig_settingsGetString = nullptr;
+static FnVoidRet orig_getMacAddress     = nullptr;
+static FnVoidRet orig_getHardwareAddress= nullptr;
+
+static void* hook_getDeviceId(void* thiz) {
+    void* ret = orig_getDeviceId ? orig_getDeviceId(thiz) : nullptr;
     JNIEnv* env = nullptr;
     if (get_env(&env) == JNI_OK)
         emit("TelephonyManager.getDeviceId", jstring_val(env, ret).c_str());
     return ret;
 }
-
-// ---------------------------------------------------------------------------
-// TelephonyManager.getSubscriberId() -> String
-// ---------------------------------------------------------------------------
-HOOK_METHOD(getSubscriberId, "TelephonyManager.getSubscriberId", void*, void* thiz) {
-    SHADOWHOOK_STACK_SCOPE();
-    void* ret = SHADOWHOOK_CALL_PREV(hook_getSubscriberId, thiz);
+static void* hook_getSubscriberId(void* thiz) {
+    void* ret = orig_getSubscriberId ? orig_getSubscriberId(thiz) : nullptr;
     JNIEnv* env = nullptr;
     if (get_env(&env) == JNI_OK)
         emit("TelephonyManager.getSubscriberId", jstring_val(env, ret).c_str());
     return ret;
 }
-
-// ---------------------------------------------------------------------------
-// TelephonyManager.getSimSerialNumber() -> String
-// ---------------------------------------------------------------------------
-HOOK_METHOD(getSimSerialNumber, "TelephonyManager.getSimSerialNumber", void*, void* thiz) {
-    SHADOWHOOK_STACK_SCOPE();
-    void* ret = SHADOWHOOK_CALL_PREV(hook_getSimSerialNumber, thiz);
+static void* hook_getSimSerialNumber(void* thiz) {
+    void* ret = orig_getSimSerialNumber ? orig_getSimSerialNumber(thiz) : nullptr;
     JNIEnv* env = nullptr;
     if (get_env(&env) == JNI_OK)
         emit("TelephonyManager.getSimSerialNumber", jstring_val(env, ret).c_str());
     return ret;
 }
-
-// ---------------------------------------------------------------------------
-// TelephonyManager.getLine1Number() -> String
-// ---------------------------------------------------------------------------
-HOOK_METHOD(getLine1Number, "TelephonyManager.getLine1Number", void*, void* thiz) {
-    SHADOWHOOK_STACK_SCOPE();
-    void* ret = SHADOWHOOK_CALL_PREV(hook_getLine1Number, thiz);
+static void* hook_getLine1Number(void* thiz) {
+    void* ret = orig_getLine1Number ? orig_getLine1Number(thiz) : nullptr;
     JNIEnv* env = nullptr;
     if (get_env(&env) == JNI_OK)
         emit("TelephonyManager.getLine1Number", jstring_val(env, ret).c_str());
     return ret;
 }
-
-// ---------------------------------------------------------------------------
-// Settings.Secure.getString(ContentResolver, String) -> String  [static]
-// ARM64 ART: x0=cr, x1=key  (no 'this' for static)
-// ---------------------------------------------------------------------------
-HOOK_METHOD(settingsGetString, "Settings.Secure.getString", void*, void* cr, void* key) {
-    SHADOWHOOK_STACK_SCOPE();
-    void* ret = SHADOWHOOK_CALL_PREV(hook_settingsGetString, cr, key);
+static void* hook_settingsGetString(void* cr, void* key) {
+    void* ret = orig_settingsGetString ? orig_settingsGetString(cr, key) : nullptr;
     JNIEnv* env = nullptr;
     if (get_env(&env) == JNI_OK) {
-        std::string key_str = jstring_val(env, key);
-        std::string val_str = jstring_val(env, ret);
-        std::string data = key_str + "=" + val_str;
-        emit("Settings.Secure.getString", data.c_str());
+        std::string k = jstring_val(env, key);
+        std::string v = jstring_val(env, ret);
+        emit("Settings.Secure.getString", (k + "=" + v).c_str());
     }
     return ret;
 }
-
-// ---------------------------------------------------------------------------
-// WifiInfo.getMacAddress() -> String
-// ---------------------------------------------------------------------------
-HOOK_METHOD(getMacAddress, "WifiInfo.getMacAddress", void*, void* thiz) {
-    SHADOWHOOK_STACK_SCOPE();
-    void* ret = SHADOWHOOK_CALL_PREV(hook_getMacAddress, thiz);
+static void* hook_getMacAddress(void* thiz) {
+    void* ret = orig_getMacAddress ? orig_getMacAddress(thiz) : nullptr;
     JNIEnv* env = nullptr;
     if (get_env(&env) == JNI_OK)
         emit("WifiInfo.getMacAddress", jstring_val(env, ret).c_str());
     return ret;
 }
-
-// ---------------------------------------------------------------------------
-// NetworkInterface.getHardwareAddress() -> byte[]
-// Returns a raw compressed array reference; just log that it was called.
-// ---------------------------------------------------------------------------
-HOOK_METHOD(getHardwareAddress, "NetworkInterface.getHardwareAddress", void*, void* thiz) {
-    SHADOWHOOK_STACK_SCOPE();
-    void* ret = SHADOWHOOK_CALL_PREV(hook_getHardwareAddress, thiz);
+static void* hook_getHardwareAddress(void* thiz) {
+    void* ret = orig_getHardwareAddress ? orig_getHardwareAddress(thiz) : nullptr;
     emit("NetworkInterface.getHardwareAddress", "called");
     return ret;
 }
 
 // ---------------------------------------------------------------------------
-// Hook installer helper
+// Installer
 // ---------------------------------------------------------------------------
 struct HookTarget {
-    const char* class_name;   // JNI form
+    const char* class_name;
     const char* method_name;
     const char* sig;
     bool        is_static;
     void*       hook_fn;
     void**      orig_out;
-    void**      stub_out;
 };
 
 static void install_one(JNIEnv* env, const HookTarget& t) {
     jclass cls = env->FindClass(t.class_name);
-    if (!cls) {
-        env->ExceptionClear();
-        LOGE("art_hooks: FindClass failed: %s", t.class_name);
-        return;
-    }
+    if (!cls) { env->ExceptionClear(); LOGE("art_hooks: FindClass failed: %s", t.class_name); return; }
     jmethodID mid = t.is_static
         ? env->GetStaticMethodID(cls, t.method_name, t.sig)
-        : env->GetMethodID(cls,        t.method_name, t.sig);
-    if (!mid) {
-        env->ExceptionClear();
-        LOGE("art_hooks: GetMethodID failed: %s.%s %s", t.class_name, t.method_name, t.sig);
-        return;
-    }
+        : env->GetMethodID(cls, t.method_name, t.sig);
+    if (!mid) { env->ExceptionClear(); LOGE("art_hooks: GetMethodID failed: %s.%s", t.class_name, t.method_name); return; }
 
     void* ep = get_entry_point(mid);
-    if (!ep) {
-        LOGE("art_hooks: entry_point is null for %s.%s", t.class_name, t.method_name);
-        return;
-    }
-    LOGI("art_hooks: entry_point %s.%s @ %p (ep_offset=%d)",
-         t.class_name, t.method_name, ep, g_ep_offset);
+    if (!ep) { LOGE("art_hooks: entry_point null for %s.%s", t.class_name, t.method_name); return; }
+    LOGI("art_hooks: ep %s.%s @ %p", t.class_name, t.method_name, ep);
 
+    // Try ShadowHook first (works for dlopen'd libs)
     void* orig = nullptr;
     void* stub = shadowhook_hook_func_addr(ep, t.hook_fn, &orig);
-    if (!stub) {
-        LOGE("art_hooks: shadowhook_hook_func_addr failed for %s.%s: %s",
-             t.class_name, t.method_name,
-             shadowhook_to_errmsg(shadowhook_get_errno()));
+    if (stub) {
+        *t.orig_out = orig;
+        LOGI("art_hooks: hooked (SH) %s.%s", t.class_name, t.method_name);
         return;
     }
-    *t.orig_out = orig;
-    *t.stub_out = stub;
-    LOGI("art_hooks: hooked %s.%s -> orig=%p", t.class_name, t.method_name, orig);
+
+    // Fall back to raw /proc/self/mem patch (works for OAT code)
+    void* tramp = raw_patch(ep, t.hook_fn);
+    if (!tramp) { LOGE("art_hooks: all hooks failed for %s.%s", t.class_name, t.method_name); return; }
+    *t.orig_out = tramp;
+    LOGI("art_hooks: hooked (raw) %s.%s", t.class_name, t.method_name);
 }
 
 // ---------------------------------------------------------------------------
@@ -345,46 +356,14 @@ void install_art_inline_hooks(JNIEnv* env, JavaVM* vm) {
     calibrate_ep_offset(env);
 
     const HookTarget targets[] = {
-        {
-            "android/telephony/TelephonyManager", "getDeviceId", "()Ljava/lang/String;",
-            false, (void*)hook_getDeviceId,
-            (void**)&orig_getDeviceId, &stub_getDeviceId
-        },
-        {
-            "android/telephony/TelephonyManager", "getSubscriberId", "()Ljava/lang/String;",
-            false, (void*)hook_getSubscriberId,
-            (void**)&orig_getSubscriberId, &stub_getSubscriberId
-        },
-        {
-            "android/telephony/TelephonyManager", "getSimSerialNumber", "()Ljava/lang/String;",
-            false, (void*)hook_getSimSerialNumber,
-            (void**)&orig_getSimSerialNumber, &stub_getSimSerialNumber
-        },
-        {
-            "android/telephony/TelephonyManager", "getLine1Number", "()Ljava/lang/String;",
-            false, (void*)hook_getLine1Number,
-            (void**)&orig_getLine1Number, &stub_getLine1Number
-        },
-        {
-            "android/provider/Settings$Secure", "getString",
-            "(Landroid/content/ContentResolver;Ljava/lang/String;)Ljava/lang/String;",
-            true,  (void*)hook_settingsGetString,
-            (void**)&orig_settingsGetString, &stub_settingsGetString
-        },
-        {
-            "android/net/wifi/WifiInfo", "getMacAddress", "()Ljava/lang/String;",
-            false, (void*)hook_getMacAddress,
-            (void**)&orig_getMacAddress, &stub_getMacAddress
-        },
-        {
-            "java/net/NetworkInterface", "getHardwareAddress", "()[B",
-            false, (void*)hook_getHardwareAddress,
-            (void**)&orig_getHardwareAddress, &stub_getHardwareAddress
-        },
+        {"android/telephony/TelephonyManager", "getDeviceId",        "()Ljava/lang/String;",  false, (void*)hook_getDeviceId,        (void**)&orig_getDeviceId},
+        {"android/telephony/TelephonyManager", "getSubscriberId",    "()Ljava/lang/String;",  false, (void*)hook_getSubscriberId,    (void**)&orig_getSubscriberId},
+        {"android/telephony/TelephonyManager", "getSimSerialNumber", "()Ljava/lang/String;",  false, (void*)hook_getSimSerialNumber, (void**)&orig_getSimSerialNumber},
+        {"android/telephony/TelephonyManager", "getLine1Number",     "()Ljava/lang/String;",  false, (void*)hook_getLine1Number,     (void**)&orig_getLine1Number},
+        {"android/provider/Settings$Secure",   "getString",          "(Landroid/content/ContentResolver;Ljava/lang/String;)Ljava/lang/String;", true,  (void*)hook_settingsGetString,  (void**)&orig_settingsGetString},
+        {"android/net/wifi/WifiInfo",          "getMacAddress",      "()Ljava/lang/String;",  false, (void*)hook_getMacAddress,      (void**)&orig_getMacAddress},
+        {"java/net/NetworkInterface",          "getHardwareAddress", "()[B",                  false, (void*)hook_getHardwareAddress, (void**)&orig_getHardwareAddress},
     };
-
-    for (const auto& t : targets) {
-        install_one(env, t);
-    }
+    for (const auto& t : targets) install_one(env, t);
     LOGI("art_hooks: inline hooks installed (ep_offset=%d)", g_ep_offset);
 }
