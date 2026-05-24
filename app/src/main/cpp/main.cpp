@@ -1,5 +1,7 @@
 #include <jni.h>
 #include <android/log.h>
+#include <functional>
+#include <string>
 #include <string_view>
 #include <shadowhook.h>
 #include <lsplant.hpp>
