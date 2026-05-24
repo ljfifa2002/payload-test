@@ -3,22 +3,11 @@ package com.pecker.payload;
 import android.util.Log;
 import java.lang.reflect.Method;
 
-/**
- * LSPlant hook callback container.
- *
- * Callback signature rule (LSPlant v5):
- *   - First param: hooker object (this class instance, passed by LSPlant)
- *   - For instance methods: second param is the target "this"
- *   - For static methods: no extra "this" param
- *   - Return type must match the target method
- *
- * backup_* fields are set from C++ after lsplant::Hook() returns.
- */
 public class HookerBridge {
 
     private static final String TAG = "payload";
 
-    // ---- backup methods (set from C++ via reflection) ----
+    // backup methods set from C++ after lsplant::Hook()
     public Method backupGetDeviceId;
     public Method backupGetSubscriberId;
     public Method backupGetSimSerialNumber;
@@ -51,57 +40,70 @@ public class HookerBridge {
         Log.i(TAG, "{\"type\":\"behavior\",\"method\":\"" + method + "\",\"data\":\"" + data + "\",\"timestamp\":" + System.currentTimeMillis() + "}");
     }
 
-    // ---- TelephonyManager.getDeviceId() ----
-    public String hookGetDeviceId(Object thiz) {
-        String v = backupGetDeviceId != null ? safeInvoke(backupGetDeviceId, thiz) : null;
+    // ---- Static callbacks (LSPlant requires static: first param = hooker object) ----
+
+    // TelephonyManager.getDeviceId()
+    public static String hookGetDeviceId(Object hooker, Object thiz) {
+        Log.d(TAG, "[probe] hookGetDeviceId called");
+        HookerBridge h = (HookerBridge) hooker;
+        String v = h.backupGetDeviceId != null ? safeInvoke(h.backupGetDeviceId, thiz) : null;
         log("TelephonyManager.getDeviceId", v != null ? v : "");
         return v;
     }
 
-    // ---- TelephonyManager.getSubscriberId() ----
-    public String hookGetSubscriberId(Object thiz) {
-        String v = backupGetSubscriberId != null ? safeInvoke(backupGetSubscriberId, thiz) : null;
+    // TelephonyManager.getSubscriberId()
+    public static String hookGetSubscriberId(Object hooker, Object thiz) {
+        Log.d(TAG, "[probe] hookGetSubscriberId called");
+        HookerBridge h = (HookerBridge) hooker;
+        String v = h.backupGetSubscriberId != null ? safeInvoke(h.backupGetSubscriberId, thiz) : null;
         log("TelephonyManager.getSubscriberId", v != null ? v : "");
         return v;
     }
 
-    // ---- TelephonyManager.getSimSerialNumber() ----
-    public String hookGetSimSerialNumber(Object thiz) {
-        String v = backupGetSimSerialNumber != null ? safeInvoke(backupGetSimSerialNumber, thiz) : null;
+    // TelephonyManager.getSimSerialNumber()
+    public static String hookGetSimSerialNumber(Object hooker, Object thiz) {
+        Log.d(TAG, "[probe] hookGetSimSerialNumber called");
+        HookerBridge h = (HookerBridge) hooker;
+        String v = h.backupGetSimSerialNumber != null ? safeInvoke(h.backupGetSimSerialNumber, thiz) : null;
         log("TelephonyManager.getSimSerialNumber", v != null ? v : "");
         return v;
     }
 
-    // ---- TelephonyManager.getLine1Number() ----
-    public String hookGetLine1Number(Object thiz) {
-        String v = backupGetLine1Number != null ? safeInvoke(backupGetLine1Number, thiz) : null;
+    // TelephonyManager.getLine1Number()
+    public static String hookGetLine1Number(Object hooker, Object thiz) {
+        Log.d(TAG, "[probe] hookGetLine1Number called");
+        HookerBridge h = (HookerBridge) hooker;
+        String v = h.backupGetLine1Number != null ? safeInvoke(h.backupGetLine1Number, thiz) : null;
         log("TelephonyManager.getLine1Number", v != null ? v : "");
         return v;
     }
 
-    // ---- Settings.Secure.getString(ContentResolver, String) ----
-    // Static target: first param after hooker is ContentResolver, second is name
-    public String hookSettingsSecureGetString(Object cr, String name) {
-        String v = backupSettingsSecureGetString != null
-                ? safeInvoke(backupSettingsSecureGetString, null, cr, name)
+    // Settings.Secure.getString(ContentResolver, String)  [static target]
+    public static String hookSettingsSecureGetString(Object hooker, Object cr, String name) {
+        Log.d(TAG, "[probe] hookSettingsSecureGetString key=" + name);
+        HookerBridge h = (HookerBridge) hooker;
+        String v = h.backupSettingsSecureGetString != null
+                ? safeInvoke(h.backupSettingsSecureGetString, null, cr, name)
                 : null;
-        if ("android_id".equals(name)) {
-            log("Settings.Secure.getString[android_id]", v != null ? v : "");
-        }
+        log("Settings.Secure.getString[" + name + "]", v != null ? v : "");
         return v;
     }
 
-    // ---- WifiInfo.getMacAddress() ----
-    public String hookGetMacAddress(Object thiz) {
-        String v = backupWifiGetMacAddress != null ? safeInvoke(backupWifiGetMacAddress, thiz) : null;
+    // WifiInfo.getMacAddress()
+    public static String hookGetMacAddress(Object hooker, Object thiz) {
+        Log.d(TAG, "[probe] hookGetMacAddress called");
+        HookerBridge h = (HookerBridge) hooker;
+        String v = h.backupWifiGetMacAddress != null ? safeInvoke(h.backupWifiGetMacAddress, thiz) : null;
         log("WifiInfo.getMacAddress", v != null ? v : "");
         return v;
     }
 
-    // ---- NetworkInterface.getHardwareAddress() ----
-    public byte[] hookGetHardwareAddress(Object thiz) {
-        byte[] v = backupNetworkInterfaceGetHardwareAddress != null
-                ? safeInvokeBytes(backupNetworkInterfaceGetHardwareAddress, thiz)
+    // NetworkInterface.getHardwareAddress()
+    public static byte[] hookGetHardwareAddress(Object hooker, Object thiz) {
+        Log.d(TAG, "[probe] hookGetHardwareAddress called");
+        HookerBridge h = (HookerBridge) hooker;
+        byte[] v = h.backupNetworkInterfaceGetHardwareAddress != null
+                ? safeInvokeBytes(h.backupNetworkInterfaceGetHardwareAddress, thiz)
                 : null;
         if (v != null) {
             StringBuilder sb = new StringBuilder();

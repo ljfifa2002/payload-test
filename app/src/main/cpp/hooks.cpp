@@ -114,13 +114,13 @@ static void hook_one(JNIEnv* env,
     }
     if (check_exception(env, "ToReflectedMethod") || target_method == nullptr) return;
 
-    // --- get callback method as reflected Method ---
-    jmethodID cb_mid = env->GetMethodID(hooker_class, callback_name, callback_sig);
+    // --- get callback method as reflected Method (always static) ---
+    jmethodID cb_mid = env->GetStaticMethodID(hooker_class, callback_name, callback_sig);
     if (check_exception(env, callback_name) || cb_mid == nullptr) {
-        LOGE("hooks: GetMethodID callback failed: %s %s", callback_name, callback_sig);
+        LOGE("hooks: GetStaticMethodID callback failed: %s %s", callback_name, callback_sig);
         return;
     }
-    jobject callback_method = env->ToReflectedMethod(hooker_class, cb_mid, JNI_FALSE);
+    jobject callback_method = env->ToReflectedMethod(hooker_class, cb_mid, JNI_TRUE);
     if (check_exception(env, "ToReflectedMethod callback") || callback_method == nullptr) return;
 
     // --- call lsplant::Hook ---
@@ -158,50 +158,51 @@ void install_device_id_hooks(JNIEnv* env) {
     jobject hooker_global = env->NewGlobalRef(hooker_obj);
     (void)hooker_global;
 
-    // 1. TelephonyManager.getDeviceId() -> String
+    // 1. TelephonyManager.getDeviceId() -> String  [instance target]
+    // callback(hooker, thiz)
     hook_one(env, hooker_obj, hooker_class,
         "android/telephony/TelephonyManager", "getDeviceId", "()Ljava/lang/String;",
-        "hookGetDeviceId", "(Ljava/lang/Object;)Ljava/lang/String;",
+        "hookGetDeviceId", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/String;",
         "backupGetDeviceId", false);
 
     // 2. TelephonyManager.getSubscriberId() -> String
     hook_one(env, hooker_obj, hooker_class,
         "android/telephony/TelephonyManager", "getSubscriberId", "()Ljava/lang/String;",
-        "hookGetSubscriberId", "(Ljava/lang/Object;)Ljava/lang/String;",
+        "hookGetSubscriberId", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/String;",
         "backupGetSubscriberId", false);
 
     // 3. TelephonyManager.getSimSerialNumber() -> String
     hook_one(env, hooker_obj, hooker_class,
         "android/telephony/TelephonyManager", "getSimSerialNumber", "()Ljava/lang/String;",
-        "hookGetSimSerialNumber", "(Ljava/lang/Object;)Ljava/lang/String;",
+        "hookGetSimSerialNumber", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/String;",
         "backupGetSimSerialNumber", false);
 
     // 4. TelephonyManager.getLine1Number() -> String
     hook_one(env, hooker_obj, hooker_class,
         "android/telephony/TelephonyManager", "getLine1Number", "()Ljava/lang/String;",
-        "hookGetLine1Number", "(Ljava/lang/Object;)Ljava/lang/String;",
+        "hookGetLine1Number", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/String;",
         "backupGetLine1Number", false);
 
-    // 5. Settings.Secure.getString(ContentResolver, String) -> String  [static]
-    // Non-static callback: this=hooker_obj, explicit params=(cr, name) matching target's static params
+    // 5. Settings.Secure.getString(ContentResolver, String) -> String  [static target]
+    // callback(hooker, cr, name)
     hook_one(env, hooker_obj, hooker_class,
         "android/provider/Settings$Secure",
         "getString",
         "(Landroid/content/ContentResolver;Ljava/lang/String;)Ljava/lang/String;",
         "hookSettingsSecureGetString",
-        "(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/String;",
+        "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/String;",
         "backupSettingsSecureGetString", true);
 
     // 6a. WifiInfo.getMacAddress() -> String
     hook_one(env, hooker_obj, hooker_class,
         "android/net/wifi/WifiInfo", "getMacAddress", "()Ljava/lang/String;",
-        "hookGetMacAddress", "(Ljava/lang/Object;)Ljava/lang/String;",
+        "hookGetMacAddress", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/String;",
         "backupWifiGetMacAddress", false);
 
     // 6b. NetworkInterface.getHardwareAddress() -> byte[]
     hook_one(env, hooker_obj, hooker_class,
         "java/net/NetworkInterface", "getHardwareAddress", "()[B",
-        "hookGetHardwareAddress", "(Ljava/lang/Object;)[B",
+        "hookGetHardwareAddress", "(Ljava/lang/Object;Ljava/lang/Object;)[B",
         "backupNetworkInterfaceGetHardwareAddress", false);
 
     LOGI("hooks: device id hooks installed");
