@@ -33,6 +33,6 @@ android {
 }
 
 dependencies {
-    implementation("org.lsposed.lsplant:lsplant-standalone:6.4")
+    implementation("org.lsposed.lsplant:lsplant-standalone:5.1")
     implementation("com.bytedance.android:shadowhook:1.0.9")
 }
