@@ -48,9 +48,29 @@ jobs:
 
           ls -la app/build/outputs/payload-libs/arm64-v8a/
 
-          # hooker.dex is built by the buildHookerDex Gradle task (triggered by assembleRelease finalizedBy)
-          # It should already be in the output dir; verify
-          ls -la app/build/outputs/payload-libs/arm64-v8a/hooker.dex || echo "WARNING: hooker.dex not found"
+      - name: Build hooker.dex
+        run: |
+          ANDROID_JAR="$ANDROID_SDK_ROOT/platforms/android-35/android.jar"
+          D8="$ANDROID_SDK_ROOT/build-tools/$(ls $ANDROID_SDK_ROOT/build-tools | sort -V | tail -1)/d8"
+
+          echo "Using android.jar: $ANDROID_JAR"
+          echo "Using d8: $D8"
+
+          mkdir -p /tmp/hooker_classes
+          javac -source 11 -target 11 \
+                -bootclasspath "$ANDROID_JAR" \
+                -d /tmp/hooker_classes \
+                app/src/main/java/com/pecker/payload/HookerBridge.java
+
+          "$D8" --min-api 21 \
+                --output /tmp/hooker_out \
+                --lib "$ANDROID_JAR" \
+                $(find /tmp/hooker_classes -name "*.class")
+
+          mv /tmp/hooker_out/classes.dex \
+             app/build/outputs/payload-libs/arm64-v8a/hooker.dex
+
+          ls -la app/build/outputs/payload-libs/arm64-v8a/
 
       - name: Upload payload libs
         uses: actions/upload-artifact@v4
