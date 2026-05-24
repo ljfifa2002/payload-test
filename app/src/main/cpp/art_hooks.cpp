@@ -4,6 +4,7 @@
 #include <dlfcn.h>
 #include <shadowhook.h>
 #include <string>
+#include <vector>
 #include <cstdint>
 #include <cstdio>
 
@@ -15,57 +16,115 @@
 // ArtMethod* / entry_point helpers
 // ---------------------------------------------------------------------------
 
-// On arm64 Android 5-15, ArtMethod begins with:
-//   [0]  declaring_class_ (uint32_t, compressed ref)
-//   [4]  access_flags_    (uint32_t)
-//   [8]  dex_code_item_offset_ / dex_method_index / ...
-//   [32] entry_point_from_quick_compiled_code_  (uintptr_t)  ← standard
+// Standard arm64 ArtMethod layout (AOSP, offset in bytes):
+//   [0]  declaring_class_  (uint32_t)
+//   [4]  access_flags_     (uint32_t)
+//   [8]  dex_code_item_offset_ (uint32_t)
+//   [12] dex_method_index_ (uint32_t)
+//   [16] method_index_     (uint16_t)
+//   [18] hotness_count_    (uint16_t)
+//   [20] imt_index_        (uint16_t) / padding
+//   [24] data_             (uintptr_t)  — JNI fn ptr / profiling info
+//   [32] entry_point_from_quick_compiled_code_  (uintptr_t)
 //
-// Oplus may have shifted this. We calibrate by finding where a known JNI
-// trampoline lives inside a reference method's ArtMethod bytes.
+// Oplus inserts extra fields before offset 0, shifting everything down.
+// We calibrate by scanning for the first 8-byte-aligned offset whose value
+// looks like a valid executable code pointer (verified via /proc/self/maps).
 
-static int g_ep_offset = 32;   // default; updated by calibrate_ep_offset()
+static int g_ep_offset = 32;
 
-// Calibrate the entry_point offset using System.currentTimeMillis(), a
-// well-known native method whose entry should be art_quick_generic_jni_trampoline.
-static void calibrate_ep_offset(JNIEnv* env) {
-    void* libart = dlopen("libart.so", RTLD_NOLOAD | RTLD_NOW);
-    if (!libart) return;
-
-    // Try both the exported symbol and the symtab name.
-    void* trampoline = dlsym(libart, "art_quick_generic_jni_trampoline");
-    if (!trampoline) {
-        // shadowhook can search the full symbol table
-        trampoline = shadowhook_dlsym_symtab(libart, "art_quick_generic_jni_trampoline");
-    }
-    dlclose(libart);
-
-    if (!trampoline) {
-        LOGI("art_hooks: calibration skipped (trampoline not found), using offset=%d", g_ep_offset);
-        return;
-    }
-    LOGI("art_hooks: jni_trampoline @ %p", trampoline);
-
-    // Get ArtMethod* for System.currentTimeMillis — a JNI native method.
-    jclass sys = env->FindClass("java/lang/System");
-    if (!sys) { env->ExceptionClear(); return; }
-    jmethodID mid = env->GetStaticMethodID(sys, "currentTimeMillis", "()J");
-    if (!mid) { env->ExceptionClear(); return; }
-
-    // jmethodID IS ArtMethod* on ART.
-    auto* am = reinterpret_cast<uintptr_t*>(mid);
-
-    // Scan the first 128 bytes in pointer-sized steps for the trampoline address.
-    for (int off = 0; off <= 120; off += 4) {
-        uintptr_t candidate = *reinterpret_cast<uintptr_t*>(
-            reinterpret_cast<uint8_t*>(am) + off);
-        if (candidate == reinterpret_cast<uintptr_t>(trampoline)) {
-            g_ep_offset = off;
-            LOGI("art_hooks: calibrated ep_offset=%d", g_ep_offset);
-            return;
+// Parse /proc/self/maps and collect [start, end) ranges that are executable.
+struct ExecRange { uintptr_t start, end; };
+static std::vector<ExecRange> load_exec_ranges() {
+    std::vector<ExecRange> ranges;
+    FILE* f = fopen("/proc/self/maps", "r");
+    if (!f) return ranges;
+    char line[512];
+    while (fgets(line, sizeof(line), f)) {
+        uintptr_t s, e;
+        char perms[8];
+        if (sscanf(line, "%lx-%lx %7s", &s, &e, perms) == 3 && perms[2] == 'x') {
+            ranges.push_back({s, e});
         }
     }
-    LOGI("art_hooks: calibration scan found nothing, keeping offset=%d", g_ep_offset);
+    fclose(f);
+    return ranges;
+}
+
+static bool is_exec_ptr(uintptr_t addr, const std::vector<ExecRange>& ranges) {
+    if (addr < 0x1000 || (addr >> 48) != 0) return false;  // obvious invalid
+    for (const auto& r : ranges) {
+        if (addr >= r.start && addr < r.end) return true;
+    }
+    return false;
+}
+
+// Calibrate entry_point offset.
+// Strategy A: use shadowhook_dlopen to get libart handle (avoids namespace issues),
+//             then find art_quick_generic_jni_trampoline and scan System.currentTimeMillis.
+// Strategy B: if A fails, use a compiled Java method (String.length) and
+//             scan for the first exec-mapped pointer in its ArtMethod.
+static void calibrate_ep_offset(JNIEnv* env) {
+    auto exec_ranges = load_exec_ranges();
+    LOGI("art_hooks: loaded %zu exec ranges from maps", exec_ranges.size());
+
+    // --- Strategy A: trampoline scan via shadowhook_dlopen ---
+    void* libart = shadowhook_dlopen("libart.so");
+    if (libart) {
+        void* trampoline = shadowhook_dlsym_symtab(libart, "art_quick_generic_jni_trampoline");
+        if (!trampoline) trampoline = dlsym(libart, "art_quick_generic_jni_trampoline");
+        if (trampoline) {
+            LOGI("art_hooks: jni_trampoline @ %p", trampoline);
+            jclass sys = env->FindClass("java/lang/System");
+            if (sys) {
+                jmethodID mid = env->GetStaticMethodID(sys, "currentTimeMillis", "()J");
+                if (mid) {
+                    auto* am = reinterpret_cast<uint8_t*>(mid);
+                    for (int off = 24; off <= 128; off += 8) {
+                        uintptr_t v = *reinterpret_cast<uintptr_t*>(am + off);
+                        if (v == reinterpret_cast<uintptr_t>(trampoline)) {
+                            g_ep_offset = off;
+                            LOGI("art_hooks: calibrated (A) ep_offset=%d", g_ep_offset);
+                            return;
+                        }
+                    }
+                    LOGI("art_hooks: strategy A scan exhausted");
+                } else { env->ExceptionClear(); }
+            } else { env->ExceptionClear(); }
+        } else {
+            LOGI("art_hooks: trampoline symbol not found in libart");
+        }
+    } else {
+        LOGE("art_hooks: shadowhook_dlopen(libart.so) failed");
+    }
+
+    // --- Strategy B: exec-range scan on a compiled Java method ---
+    // String.length() is a simple Java method always AOT-compiled into boot image.
+    jclass str_cls = env->FindClass("java/lang/String");
+    if (!str_cls) { env->ExceptionClear(); goto done; }
+    {
+        jmethodID mid = env->GetMethodID(str_cls, "length", "()I");
+        if (!mid) { env->ExceptionClear(); goto done; }
+        auto* am = reinterpret_cast<uint8_t*>(mid);
+        // Dump ArtMethod bytes for diagnosis
+        LOGI("art_hooks: String.length ArtMethod bytes:");
+        for (int off = 0; off <= 72; off += 8) {
+            uintptr_t v = *reinterpret_cast<uintptr_t*>(am + off);
+            LOGI("art_hooks:   [%3d] = 0x%016lx  exec=%d", off, v, is_exec_ptr(v, exec_ranges));
+        }
+        // Find first exec pointer starting at offset 24
+        for (int off = 24; off <= 128; off += 8) {
+            uintptr_t v = *reinterpret_cast<uintptr_t*>(am + off);
+            if (is_exec_ptr(v, exec_ranges)) {
+                g_ep_offset = off;
+                LOGI("art_hooks: calibrated (B) ep_offset=%d via String.length", g_ep_offset);
+                return;
+            }
+        }
+        LOGI("art_hooks: strategy B found no exec pointer");
+    }
+done:
+    LOGI("art_hooks: calibration failed, keeping default offset=%d", g_ep_offset);
 }
 
 // Read the compiled-code entry point from an ArtMethod.
