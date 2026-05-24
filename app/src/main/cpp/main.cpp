@@ -26,7 +26,6 @@ static bool proxy_unhook(void* func) {
     return true;
 }
 
-// 由 dlopen 触发，无需 JVM。初始化 ShadowHook，为后续 LSPlant 做准备。
 __attribute__((constructor))
 static void payload_init() {
     int sh_ret = shadowhook_init(SHADOWHOOK_MODE_UNIQUE, false);
@@ -35,15 +34,23 @@ static void payload_init() {
         return;
     }
     LOGI("shadowhook_init ok");
-    LOGI("payload constructor ok");
-}
 
-// ART 在 dlopen 后会自动调用 JNI_OnLoad（若库被加载进 Java 类加载器管理的进程）。
-// 若未触发，后续阶段可改用 constructor 内通过 /proc/self/maps 找 JavaVM。
-JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
+    // 进程从 zygote fork 后 JVM 已存在，直接获取
+    JavaVM* vm = nullptr;
+    jsize count = 0;
+    if (JNI_GetCreatedJavaVMs(&vm, 1, &count) != JNI_OK || count == 0 || vm == nullptr) {
+        LOGE("JNI_GetCreatedJavaVMs failed count=%d", (int)count);
+        return;
+    }
+
     JNIEnv* env = nullptr;
-    if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK) {
-        return JNI_ERR;
+    jint env_ret = vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6);
+    if (env_ret == JNI_EDETACHED) {
+        env_ret = vm->AttachCurrentThread(&env, nullptr);
+    }
+    if (env_ret != JNI_OK || env == nullptr) {
+        LOGE("GetEnv failed ret=%d", (int)env_ret);
+        return;
     }
 
     void* libart = shadowhook_dlopen("libart.so");
@@ -57,10 +64,9 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
     bool lsp_ok = lsplant::Init(env, info);
     if (!lsp_ok) {
         LOGE("lsplant::Init failed");
-        return JNI_ERR;
+        return;
     }
     LOGI("lsplant::Init ok");
 
-    LOGI("JNI_OnLoad ok");
-    return JNI_VERSION_1_6;
+    LOGI("payload init ok");
 }
