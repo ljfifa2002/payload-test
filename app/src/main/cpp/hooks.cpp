@@ -1,6 +1,8 @@
 #include "hooks.h"
 #include <jni.h>
 #include <android/log.h>
+#include <functional>
+#include <string>
 #include <lsplant.hpp>
 
 #define TAG "payload"
