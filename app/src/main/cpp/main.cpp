@@ -7,6 +7,7 @@
 #include <shadowhook.h>
 #include <lsplant.hpp>
 #include "hooks.h"
+#include "art_hooks.h"
 
 #define TAG "payload"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
@@ -78,6 +79,7 @@ static void payload_init() {
     }
     LOGI("lsplant::Init ok");
 
-    install_device_id_hooks(env);
+    install_device_id_hooks(env);   // LSPlant path — works on non-Oplus
+    install_art_inline_hooks(env, vm); // ShadowHook inline path — bypasses Oplus watchdog
     LOGI("payload init ok");
 }
