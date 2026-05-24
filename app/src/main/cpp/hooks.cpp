@@ -205,5 +205,14 @@ void install_device_id_hooks(JNIEnv* env) {
         "hookGetHardwareAddress", "(Ljava/lang/Object;Ljava/lang/Object;)[B",
         "backupNetworkInterfaceGetHardwareAddress", false);
 
+    // DIAGNOSTIC: Activity.onCreate(Bundle) -> void
+    // App-specific code, never in zygote JIT cache — if this fires, LSPlant works.
+    // If this also doesn't fire, LSPlant is broken on this device.
+    hook_one(env, hooker_obj, hooker_class,
+        "android/app/Activity", "onCreate", "(Landroid/os/Bundle;)V",
+        "hookActivityOnCreate",
+        "(Ljava/lang/Object;Ljava/lang/Object;Landroid/os/Bundle;)V",
+        "backupActivityOnCreate", false);
+
     LOGI("hooks: device id hooks installed");
 }

@@ -15,6 +15,17 @@ public class HookerBridge {
     public Method backupSettingsSecureGetString;
     public Method backupWifiGetMacAddress;
     public Method backupNetworkInterfaceGetHardwareAddress;
+    public Method backupActivityOnCreate;  // diagnostic
+
+    // ---- diagnostic: Activity.onCreate ----
+    public static void hookActivityOnCreate(Object hooker, Object thiz, Object bundle) {
+        Log.i(TAG, "[probe] Activity.onCreate fired in pid=" + android.os.Process.myPid());
+        HookerBridge h = (HookerBridge) hooker;
+        if (h.backupActivityOnCreate != null) {
+            try { h.backupActivityOnCreate.invoke(thiz, bundle); }
+            catch (Exception e) { Log.e(TAG, "backup Activity.onCreate failed: " + e); }
+        }
+    }
 
     // ---- helpers ----
 
