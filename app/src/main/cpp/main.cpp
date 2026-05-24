@@ -1,5 +1,6 @@
 #include <jni.h>
 #include <android/log.h>
+#include <dlfcn.h>
 #include <functional>
 #include <string>
 #include <string_view>
@@ -35,10 +36,18 @@ static void payload_init() {
     }
     LOGI("shadowhook_init ok");
 
-    // 进程从 zygote fork 后 JVM 已存在，直接获取
+    // JNI_GetCreatedJavaVMs 不在默认链接库，用 dlsym 动态查找
+    using GetCreatedJavaVMs_t = jint (*)(JavaVM**, jsize, jsize*);
+    auto get_vms = reinterpret_cast<GetCreatedJavaVMs_t>(
+        dlsym(RTLD_DEFAULT, "JNI_GetCreatedJavaVMs"));
+    if (get_vms == nullptr) {
+        LOGE("dlsym JNI_GetCreatedJavaVMs failed");
+        return;
+    }
+
     JavaVM* vm = nullptr;
     jsize count = 0;
-    if (JNI_GetCreatedJavaVMs(&vm, 1, &count) != JNI_OK || count == 0 || vm == nullptr) {
+    if (get_vms(&vm, 1, &count) != JNI_OK || count == 0 || vm == nullptr) {
         LOGE("JNI_GetCreatedJavaVMs failed count=%d", (int)count);
         return;
     }
