@@ -18,6 +18,13 @@ public class HookerBridge {
     public Method backupGetLastKnownLocation;
     public Method backupLocationGetLatitude;
     public Method backupLocationGetLongitude;
+    // Phase 4
+    public Method backupContentResolverQuery;
+    public Method backupCameraManagerOpenCamera;
+    public Method backupMediaRecorderSetAudioSource;
+    // Phase 5
+    public Method backupUrlOpenConnection;
+    public Method backupOkHttpNewCall;
 
     // LSPlant 6.4 calls the hooker as a virtual (instance) method:
     //   hookerInstance.hookXxx(Object[] args)
@@ -33,6 +40,11 @@ public class HookerBridge {
     private byte[] safeInvokeBytes(Method m, Object thiz) {
         try { return (byte[]) m.invoke(thiz); }
         catch (Exception e) { Log.e(TAG, "backup invoke bytes failed: " + e); return null; }
+    }
+
+    private Object safeInvokeObject(Method m, Object thiz, Object... params) {
+        try { return m.invoke(thiz, params); }
+        catch (Exception e) { Log.e(TAG, "backup invoke object failed: " + e); return null; }
     }
 
     private static void log(String method, String data) {
@@ -162,5 +174,66 @@ public class HookerBridge {
         }
         log("Location.getLongitude", v != null ? v.toString() : "0.0");
         return v != null ? v : 0.0;
+    }
+
+    // ---- Phase 4: sensitive data ----
+
+    // ContentResolver.query(Uri, String[], Bundle, CancellationSignal)  instance
+    // args={thiz, uri, projection, queryArgs, cancellationSignal}
+    public Object hookContentResolverQuery(Object[] args) {
+        Object thiz   = args[0];
+        Object uri    = args[1];
+        String uriStr = uri != null ? uri.toString() : "";
+        // only log URIs that contain sensitive authority keywords
+        boolean sensitive = uriStr.contains("contact") || uriStr.contains("sms")
+                || uriStr.contains("mms") || uriStr.contains("call_log")
+                || uriStr.contains("calendar") || uriStr.contains("media");
+        Object cursor = backupContentResolverQuery != null
+                ? safeInvokeObject(backupContentResolverQuery, thiz, args[1], args[2], args[3], args[4])
+                : null;
+        if (sensitive) log("ContentResolver.query", uriStr);
+        return cursor;
+    }
+
+    // CameraManager.openCamera(String, StateCallback, Handler)  instance: args={thiz, cameraId, cb, handler}
+    public Object hookCameraManagerOpenCamera(Object[] args) {
+        String cameraId = args[1] != null ? args[1].toString() : "";
+        log("CameraManager.openCamera", cameraId);
+        if (backupCameraManagerOpenCamera != null)
+            safeInvokeObject(backupCameraManagerOpenCamera, args[0], args[1], args[2], args[3]);
+        return null;
+    }
+
+    // MediaRecorder.setAudioSource(int)  instance: args={thiz, audioSource}
+    public Object hookMediaRecorderSetAudioSource(Object[] args) {
+        int src = args[1] != null ? ((Number) args[1]).intValue() : -1;
+        log("MediaRecorder.setAudioSource", String.valueOf(src));
+        if (backupMediaRecorderSetAudioSource != null)
+            safeInvokeObject(backupMediaRecorderSetAudioSource, args[0], args[1]);
+        return null;
+    }
+
+    // ---- Phase 5: network ----
+
+    // URL.openConnection()  instance: args={thiz}
+    public Object hookUrlOpenConnection(Object[] args) {
+        String url = args[0] != null ? args[0].toString() : "";
+        log("URL.openConnection", url);
+        return backupUrlOpenConnection != null
+                ? safeInvokeObject(backupUrlOpenConnection, args[0])
+                : null;
+    }
+
+    // OkHttpClient.newCall(Request)  instance: args={thiz, request}
+    public Object hookOkHttpNewCall(Object[] args) {
+        try {
+            String url = args[1].getClass().getMethod("url").invoke(args[1]).toString();
+            log("OkHttpClient.newCall", url);
+        } catch (Exception e) {
+            log("OkHttpClient.newCall", "?");
+        }
+        return backupOkHttpNewCall != null
+                ? safeInvokeObject(backupOkHttpNewCall, args[0], args[1])
+                : null;
     }
 }

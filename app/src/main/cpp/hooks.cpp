@@ -20,6 +20,25 @@ static bool check_exception(JNIEnv* env, const char* ctx) {
     return false;
 }
 
+// App context classloader — saved during load_hooker_class for app-bundled libs (e.g. OkHttp3).
+static jobject g_app_cl = nullptr;
+
+// Find a class through the app's context classloader.
+// Use for classes not visible to FindClass (e.g. OkHttp3 bundled inside the app).
+static jclass find_app_class(JNIEnv* env, const char* jni_name) {
+    if (!g_app_cl) return nullptr;
+    std::string dot_name = jni_name;
+    for (auto& c : dot_name) if (c == '/') c = '.';
+    jclass cl_cls = env->GetObjectClass(g_app_cl);
+    jmethodID load_cls = env->GetMethodID(cl_cls, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;");
+    if (!load_cls) { env->ExceptionClear(); return nullptr; }
+    jstring jname = env->NewStringUTF(dot_name.c_str());
+    auto result = static_cast<jclass>(env->CallObjectMethod(g_app_cl, load_cls, jname));
+    env->DeleteLocalRef(jname);
+    if (env->ExceptionCheck()) { env->ExceptionClear(); return nullptr; }
+    return result;
+}
+
 // Load hooker.dex from /data/local/tmp, return HookerBridge class or nullptr.
 static jclass load_hooker_class(JNIEnv* env) {
     // Use DexClassLoader via JNI reflection
@@ -37,6 +56,9 @@ static jclass load_hooker_class(JNIEnv* env) {
     jobject cur_thread = env->CallStaticObjectMethod(thread_class, current_thread);
     jobject parent_cl = env->CallObjectMethod(cur_thread, get_context_cl);
     if (check_exception(env, "getContextClassLoader")) parent_cl = nullptr;
+
+    // Save for find_app_class (OkHttp3 etc.)
+    if (parent_cl && !g_app_cl) g_app_cl = env->NewGlobalRef(parent_cl);
 
     jstring dex_path = env->NewStringUTF("/data/local/tmp/hooker.dex");
     // optimizedDirectory is ignored on API 26+; use null
@@ -78,6 +100,7 @@ static jobject create_hooker(JNIEnv* env, jclass hooker_class) {
 // callback_sig: JNI descriptor for callback (includes hooker as first param)
 // backup_field: name of backup Method field on HookerBridge
 // is_static: whether target method is static
+// use_app_cl: look up target class via app classloader (for app-bundled libs like OkHttp3)
 static void hook_one(JNIEnv* env,
                      jobject hooker_obj,
                      jclass hooker_class,
@@ -87,9 +110,16 @@ static void hook_one(JNIEnv* env,
                      const char* callback_name,
                      const char* callback_sig,
                      const char* backup_field,
-                     bool is_static) {
+                     bool is_static,
+                     bool use_app_cl = false) {
     // --- get target class ---
-    jclass target_class = env->FindClass(target_class_name);
+    jclass target_class = use_app_cl
+        ? find_app_class(env, target_class_name)
+        : env->FindClass(target_class_name);
+    if (use_app_cl && target_class == nullptr) {
+        LOGI("hooks: app class not found (optional): %s", target_class_name);
+        return;
+    }
     if (check_exception(env, target_class_name) || target_class == nullptr) {
         LOGE("hooks: FindClass failed: %s", target_class_name);
         return;
@@ -209,6 +239,31 @@ void install_device_id_hooks(JNIEnv* env) {
     hook_one(env, hooker_obj, hooker_class,
         "android/location/Location", "getLongitude", "()D",
         "hookLocationGetLongitude", kCbSig, "backupLocationGetLongitude", false);
+
+    // Phase 4: sensitive data
+    hook_one(env, hooker_obj, hooker_class,
+        "android/content/ContentResolver", "query",
+        "(Landroid/net/Uri;[Ljava/lang/String;Landroid/os/Bundle;Landroid/os/CancellationSignal;)Landroid/database/Cursor;",
+        "hookContentResolverQuery", kCbSig, "backupContentResolverQuery", false);
+
+    hook_one(env, hooker_obj, hooker_class,
+        "android/hardware/camera2/CameraManager", "openCamera",
+        "(Ljava/lang/String;Landroid/hardware/camera2/CameraDevice$StateCallback;Landroid/os/Handler;)V",
+        "hookCameraManagerOpenCamera", kCbSig, "backupCameraManagerOpenCamera", false);
+
+    hook_one(env, hooker_obj, hooker_class,
+        "android/media/MediaRecorder", "setAudioSource", "(I)V",
+        "hookMediaRecorderSetAudioSource", kCbSig, "backupMediaRecorderSetAudioSource", false);
+
+    // Phase 5: network
+    hook_one(env, hooker_obj, hooker_class,
+        "java/net/URL", "openConnection", "()Ljava/net/URLConnection;",
+        "hookUrlOpenConnection", kCbSig, "backupUrlOpenConnection", false);
+
+    // OkHttp3 — optional, only present in apps that bundle it
+    hook_one(env, hooker_obj, hooker_class,
+        "okhttp3/OkHttpClient", "newCall", "(Lokhttp3/Request;)Lokhttp3/Call;",
+        "hookOkHttpNewCall", kCbSig, "backupOkHttpNewCall", false, true);
 
     LOGI("hooks: device id hooks installed");
 }
