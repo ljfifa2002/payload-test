@@ -20,7 +20,7 @@
 | 5 | `android.provider.Settings.Secure.getString(ContentResolver, String)` | `(Landroid/content/ContentResolver;Ljava/lang/String;)Ljava/lang/String;` | 是 | android_id 等系统值（key 嵌入 method 字段） | `Settings.Secure.getString[<key>]` |
 | 6 | `android.net.wifi.WifiInfo.getMacAddress()` | `()Ljava/lang/String;` | 否 | WiFi MAC 地址 | `WifiInfo.getMacAddress` |
 | 7 | `java.net.NetworkInterface.getHardwareAddress()` | `()[B` | 否 | 网卡 MAC 地址（hex 格式） | `NetworkInterface.getHardwareAddress` |
-| 8 | `android.app.Activity.onCreate(Bundle)` | `(Landroid/os/Bundle;)V` | 否 | App 启动探针（pid） | `[probe] Activity.onCreate`（写 Log.i，不走 JSON） |
+| 8 | `android.app.Activity.onCreate(Bundle)` | `(Landroid/os/Bundle;)V` | 否 | ~~App 启动探针（pid）~~ **已禁用** — 拦截所有 Activity 导致部分 App 白屏卡死 | `[probe] Activity.onCreate` |
 
 ---
 
