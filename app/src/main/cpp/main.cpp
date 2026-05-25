@@ -8,6 +8,7 @@
 #include <lsplant.hpp>
 #include "hooks.h"
 #include "art_hooks.h"
+#include "ssl_hooks.h"
 
 #define TAG "payload"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
@@ -81,5 +82,6 @@ static void payload_init() {
 
     install_device_id_hooks(env);   // LSPlant path — works on non-Oplus
     install_art_inline_hooks(env, vm); // ShadowHook inline path — bypasses Oplus watchdog
+    install_ssl_hooks();               // ShadowHook sym hook — SSL_read/SSL_write plaintext
     LOGI("payload init ok");
 }

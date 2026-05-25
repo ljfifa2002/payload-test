@@ -50,6 +50,8 @@
 |---|----------|---------|------|---------|-----------------|
 | 15 | `java.net.URL.openConnection()` | `()Ljava/net/URLConnection;` | 否 | 请求 URL 字符串 | `URL.openConnection` |
 | 16 | `okhttp3.OkHttpClient.newCall(Request)` | `(Lokhttp3/Request;)Lokhttp3/Call;` | 否 | OkHttp 请求 URL（App 未打包 OkHttp3 时自动跳过） | `OkHttpClient.newCall` |
+| 17 | `libssl.so SSL_write(SSL*, const void*, int)` | native | — | SNI host + 明文长度 + 前128字节预览（文本/hex） | `SSL_write` |
+| 18 | `libssl.so SSL_read(SSL*, void*, int)` | native | — | SNI host + 明文长度 + 前128字节预览（文本/hex） | `SSL_read` |
 
 ---
 
@@ -59,9 +61,9 @@
 
 | # | Java API | JNI 签名 | 静态 | 捕获内容 | 日志 method 字段 |
 |---|----------|---------|------|---------|-----------------|
-| 17 | `android.hardware.SensorManager.registerListener(SensorEventListener, Sensor, int)` | `(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;I)Z` | 否 | 传感器类型编号 + 类型名 + 硬件名称 + 采样率 | `SensorManager.registerListener` |
-| 18 | `android.hardware.SensorManager.registerListener(SensorEventListener, Sensor, int, int)` | `(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;II)Z` | 否 | 同上 + 最大延迟（maxLatency） | `SensorManager.registerListener` |
-| 19 | `android.hardware.SensorManager.registerListener(SensorEventListener, Sensor, int, Handler)` | `(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;ILandroid/os/Handler;)Z` | 否 | 同上 + Handler | `SensorManager.registerListener` |
+| 19 | `android.hardware.SensorManager.registerListener(SensorEventListener, Sensor, int)` | `(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;I)Z` | 否 | 传感器类型编号 + 类型名 + 硬件名称 + 采样率 | `SensorManager.registerListener` |
+| 20 | `android.hardware.SensorManager.registerListener(SensorEventListener, Sensor, int, int)` | `(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;II)Z` | 否 | 同上 + 最大延迟（maxLatency） | `SensorManager.registerListener` |
+| 21 | `android.hardware.SensorManager.registerListener(SensorEventListener, Sensor, int, Handler)` | `(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;ILandroid/os/Handler;)Z` | 否 | 同上 + Handler | `SensorManager.registerListener` |
 
 ---
 
