@@ -114,13 +114,13 @@ static void hook_one(JNIEnv* env,
     }
     if (check_exception(env, "ToReflectedMethod") || target_method == nullptr) return;
 
-    // --- get callback method as reflected Method (always static) ---
-    jmethodID cb_mid = env->GetStaticMethodID(hooker_class, callback_name, callback_sig);
+    // --- get callback method as reflected Method (instance method — LSPlant calls it virtually) ---
+    jmethodID cb_mid = env->GetMethodID(hooker_class, callback_name, callback_sig);
     if (check_exception(env, callback_name) || cb_mid == nullptr) {
-        LOGE("hooks: GetStaticMethodID callback failed: %s %s", callback_name, callback_sig);
+        LOGE("hooks: GetMethodID callback failed: %s %s", callback_name, callback_sig);
         return;
     }
-    jobject callback_method = env->ToReflectedMethod(hooker_class, cb_mid, JNI_TRUE);
+    jobject callback_method = env->ToReflectedMethod(hooker_class, cb_mid, JNI_FALSE);
     if (check_exception(env, "ToReflectedMethod callback") || callback_method == nullptr) return;
 
     // --- call lsplant::Hook ---

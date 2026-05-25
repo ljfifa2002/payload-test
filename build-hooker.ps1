@@ -56,12 +56,13 @@ Write-Host "d8          : $D8"
 Write-Host "[1/3] javac  HookerBridge.java"
 $ClassesDir = "$OutDir\classes"
 New-Item -ItemType Directory -Force $ClassesDir | Out-Null
-# Locate javac: prefer JAVA_HOME, fall back to PATH
-$Javac = if ($env:JAVA_HOME) { "$env:JAVA_HOME\bin\javac.exe" } else { "javac" }
-if ($env:JAVA_HOME -and -not (Test-Path $Javac)) {
-    Write-Error "javac not found at $Javac"
-    exit 1
-}
+# Locate javac: prefer explicit local JDK, then JAVA_HOME, then PATH
+$LocalJdk = "D:\develop\tools\jdk-25.0.2+10"
+$Javac = if (Test-Path "$LocalJdk\bin\javac.exe") { "$LocalJdk\bin\javac.exe" }
+         elseif ($env:JAVA_HOME) { "$env:JAVA_HOME\bin\javac.exe" }
+         else { "javac" }
+# Ensure JAVA_HOME is set for d8 (which calls java internally)
+if (-not $env:JAVA_HOME) { $env:JAVA_HOME = $LocalJdk }
 & $Javac --release 11 -classpath $AndroidJar -d $ClassesDir $JavaSrc
 if ($LASTEXITCODE -ne 0) { Write-Error "javac failed"; exit 1 }
 
@@ -70,7 +71,8 @@ Write-Host "[2/3] d8  ->  hooker.dex"
 $DexDir = "$OutDir\dex"
 New-Item -ItemType Directory -Force $DexDir | Out-Null
 # Pack .class files into a jar first to avoid Windows path issues with d8
-$Jar = "$env:JAVA_HOME\bin\jar.exe"
+$JdkBin = Split-Path $Javac
+$Jar = "$JdkBin\jar.exe"
 $ClassesJar = "$OutDir\classes.jar"
 & $Jar cf $ClassesJar -C $ClassesDir .
 if ($LASTEXITCODE -ne 0) { Write-Error "jar failed"; exit 1 }
