@@ -5,6 +5,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/mman.h>
+#include <sys/system_properties.h>
 #include <shadowhook.h>
 #include <string>
 #include <vector>
@@ -391,8 +392,37 @@ static void install_one(JNIEnv* env, const HookTarget& t) {
 // ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
+
+// Returns true only on Oplus/ColorOS devices where the ART watchdog blocks LSPlant.
+// On all other devices, LSPlant already works and art_hooks would double-hook,
+// causing interpreter bridge to crash with SEGV because Level2 lacks declaring_class_.
+static bool is_oplus_device() {
+    char manufacturer[PROP_VALUE_MAX] = {};
+    char brand[PROP_VALUE_MAX] = {};
+    __system_property_get("ro.product.manufacturer", manufacturer);
+    __system_property_get("ro.product.brand", brand);
+    // Oplus ecosystem: OPPO, OnePlus, realme, IQOO, vivo (oplus ART hardening)
+    for (const char* val : {manufacturer, brand}) {
+        std::string s = val;
+        for (auto& c : s) c = tolower(c);
+        if (s.find("oppo") != std::string::npos ||
+            s.find("oneplus") != std::string::npos ||
+            s.find("realme") != std::string::npos ||
+            s.find("oplus") != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void install_art_inline_hooks(JNIEnv* env, JavaVM* vm) {
     g_vm = vm;
+
+    if (!is_oplus_device()) {
+        LOGI("art_hooks: non-Oplus device, skipping inline hooks (LSPlant handles it)");
+        return;
+    }
+
     calibrate_ep_offset(env);
 
     const HookTarget targets[] = {
