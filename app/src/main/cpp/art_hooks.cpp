@@ -330,7 +330,7 @@ static void install_one(JNIEnv* env, const HookTarget& t) {
     // Fall back: patch Level2 entry_point (Oplus two-level dispatch)
     orig = patch_level2_entry(ep, t.hook_fn);
     if (!orig) { LOGE("art_hooks: all hooks failed for %s.%s", t.class_name, t.method_name); return; }
-    *t.orig_out = reinterpret_cast<decltype(orig_getDeviceId)>(orig);
+    memcpy(t.orig_out, &orig, sizeof(void*));
     LOGI("art_hooks: hooked (L2) %s.%s orig=%p", t.class_name, t.method_name, orig);
 }
 
