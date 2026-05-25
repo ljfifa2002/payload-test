@@ -15,6 +15,9 @@ public class HookerBridge {
     public Method backupWifiGetMacAddress;
     public Method backupNetworkInterfaceGetHardwareAddress;
     public Method backupActivityOnCreate;
+    public Method backupGetLastKnownLocation;
+    public Method backupLocationGetLatitude;
+    public Method backupLocationGetLongitude;
 
     // LSPlant 6.4 calls the hooker as a virtual (instance) method:
     //   hookerInstance.hookXxx(Object[] args)
@@ -111,5 +114,53 @@ public class HookerBridge {
             catch (Exception e) { Log.e(TAG, "backup Activity.onCreate failed: " + e); }
         }
         return null;
+    }
+
+    // LocationManager.getLastKnownLocation(String provider)  instance: args={thiz, provider}
+    public Object hookGetLastKnownLocation(Object[] args) {
+        Object thiz     = args[0];
+        String provider = (String) args[1];
+        Object location = null;
+        if (backupGetLastKnownLocation != null) {
+            try { location = backupGetLastKnownLocation.invoke(thiz, provider); }
+            catch (Exception e) { Log.e(TAG, "backup getLastKnownLocation failed: " + e); }
+        }
+        if (location != null) {
+            try {
+                double lat = (Double) location.getClass().getMethod("getLatitude").invoke(location);
+                double lon = (Double) location.getClass().getMethod("getLongitude").invoke(location);
+                log("LocationManager.getLastKnownLocation[" + provider + "]",
+                    lat + "," + lon);
+            } catch (Exception e) {
+                log("LocationManager.getLastKnownLocation[" + provider + "]", "err:" + e);
+            }
+        } else {
+            log("LocationManager.getLastKnownLocation[" + provider + "]", "null");
+        }
+        return location;
+    }
+
+    // Location.getLatitude()  instance: args={thiz}
+    public Object hookLocationGetLatitude(Object[] args) {
+        Object thiz = args[0];
+        Double v = null;
+        if (backupLocationGetLatitude != null) {
+            try { v = (Double) backupLocationGetLatitude.invoke(thiz); }
+            catch (Exception e) { Log.e(TAG, "backup getLatitude failed: " + e); }
+        }
+        log("Location.getLatitude", v != null ? v.toString() : "0.0");
+        return v != null ? v : 0.0;
+    }
+
+    // Location.getLongitude()  instance: args={thiz}
+    public Object hookLocationGetLongitude(Object[] args) {
+        Object thiz = args[0];
+        Double v = null;
+        if (backupLocationGetLongitude != null) {
+            try { v = (Double) backupLocationGetLongitude.invoke(thiz); }
+            catch (Exception e) { Log.e(TAG, "backup getLongitude failed: " + e); }
+        }
+        log("Location.getLongitude", v != null ? v.toString() : "0.0");
+        return v != null ? v : 0.0;
     }
 }

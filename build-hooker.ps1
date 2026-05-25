@@ -57,7 +57,7 @@ Write-Host "[1/3] javac  HookerBridge.java"
 $ClassesDir = "$OutDir\classes"
 New-Item -ItemType Directory -Force $ClassesDir | Out-Null
 # Locate javac: prefer explicit local JDK, then JAVA_HOME, then PATH
-$LocalJdk = "D:\develop\tools\jdk-25.0.2+10"
+$LocalJdk = if (Test-Path "D:\develop\tools\jdk-21.0.11+10\bin\javac.exe") { "D:\develop\tools\jdk-21.0.11+10" } else { "D:\develop\tools\jdk-25.0.2+10" }
 $Javac = if (Test-Path "$LocalJdk\bin\javac.exe") { "$LocalJdk\bin\javac.exe" }
          elseif ($env:JAVA_HOME) { "$env:JAVA_HOME\bin\javac.exe" }
          else { "javac" }

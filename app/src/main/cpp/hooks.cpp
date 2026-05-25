@@ -197,5 +197,18 @@ void install_device_id_hooks(JNIEnv* env) {
         "android/app/Activity", "onCreate", "(Landroid/os/Bundle;)V",
         "hookActivityOnCreate", kCbSig, "backupActivityOnCreate", false);
 
+    hook_one(env, hooker_obj, hooker_class,
+        "android/location/LocationManager", "getLastKnownLocation",
+        "(Ljava/lang/String;)Landroid/location/Location;",
+        "hookGetLastKnownLocation", kCbSig, "backupGetLastKnownLocation", false);
+
+    hook_one(env, hooker_obj, hooker_class,
+        "android/location/Location", "getLatitude", "()D",
+        "hookLocationGetLatitude", kCbSig, "backupLocationGetLatitude", false);
+
+    hook_one(env, hooker_obj, hooker_class,
+        "android/location/Location", "getLongitude", "()D",
+        "hookLocationGetLongitude", kCbSig, "backupLocationGetLongitude", false);
+
     LOGI("hooks: device id hooks installed");
 }
