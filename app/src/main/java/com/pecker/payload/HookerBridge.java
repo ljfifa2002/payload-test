@@ -25,6 +25,10 @@ public class HookerBridge {
     // Phase 5
     public Method backupUrlOpenConnection;
     public Method backupOkHttpNewCall;
+    // Phase 6: sensors
+    public Method backupSensorRegister3;
+    public Method backupSensorRegister4Int;
+    public Method backupSensorRegister4Handler;
 
     // LSPlant 6.4 calls the hooker as a virtual (instance) method:
     //   hookerInstance.hookXxx(Object[] args)
@@ -235,5 +239,77 @@ public class HookerBridge {
         return backupOkHttpNewCall != null
                 ? safeInvokeObject(backupOkHttpNewCall, args[0], args[1])
                 : null;
+    }
+
+    // ---- Phase 6: sensors ----
+
+    private static String sensorTypeName(int type) {
+        switch (type) {
+            case 1:  return "ACCELEROMETER";
+            case 2:  return "MAGNETIC_FIELD";
+            case 3:  return "ORIENTATION";
+            case 4:  return "GYROSCOPE";
+            case 5:  return "LIGHT";
+            case 6:  return "PRESSURE";
+            case 7:  return "TEMPERATURE";
+            case 8:  return "PROXIMITY";
+            case 9:  return "GRAVITY";
+            case 10: return "LINEAR_ACCELERATION";
+            case 11: return "ROTATION_VECTOR";
+            case 12: return "RELATIVE_HUMIDITY";
+            case 13: return "AMBIENT_TEMPERATURE";
+            case 14: return "MAGNETIC_FIELD_UNCALIBRATED";
+            case 15: return "GAME_ROTATION_VECTOR";
+            case 16: return "GYROSCOPE_UNCALIBRATED";
+            case 17: return "SIGNIFICANT_MOTION";
+            case 18: return "STEP_DETECTOR";
+            case 19: return "STEP_COUNTER";
+            case 20: return "GEOMAGNETIC_ROTATION_VECTOR";
+            case 21: return "HEART_RATE";
+            case 28: return "POSE_6DOF";
+            case 29: return "STATIONARY_DETECT";
+            case 30: return "MOTION_DETECT";
+            case 31: return "HEART_BEAT";
+            case 34: return "LOW_LATENCY_OFFBODY_DETECT";
+            case 35: return "ACCELEROMETER_UNCALIBRATED";
+            case 36: return "HINGE_ANGLE";
+            default: return "TYPE_" + type;
+        }
+    }
+
+    private static void logSensor(Object sensor, int rate) {
+        if (sensor == null) return;
+        try {
+            int type    = (Integer) sensor.getClass().getMethod("getType").invoke(sensor);
+            String name = (String)  sensor.getClass().getMethod("getName").invoke(sensor);
+            log("SensorManager.registerListener",
+                type + "(" + sensorTypeName(type) + ")/" + name + " rate=" + rate);
+        } catch (Exception e) {
+            log("SensorManager.registerListener", "?");
+        }
+    }
+
+    // registerListener(SensorEventListener, Sensor, int)  instance: args={thiz, listener, sensor, rate}
+    public Object hookSensorRegister3(Object[] args) {
+        logSensor(args[2], args[3] != null ? ((Number) args[3]).intValue() : -1);
+        return backupSensorRegister3 != null
+                ? safeInvokeObject(backupSensorRegister3, args[0], args[1], args[2], args[3])
+                : Boolean.FALSE;
+    }
+
+    // registerListener(SensorEventListener, Sensor, int, int)  instance: args={thiz, listener, sensor, rate, maxLatency}
+    public Object hookSensorRegister4Int(Object[] args) {
+        logSensor(args[2], args[3] != null ? ((Number) args[3]).intValue() : -1);
+        return backupSensorRegister4Int != null
+                ? safeInvokeObject(backupSensorRegister4Int, args[0], args[1], args[2], args[3], args[4])
+                : Boolean.FALSE;
+    }
+
+    // registerListener(SensorEventListener, Sensor, int, Handler)  instance: args={thiz, listener, sensor, rate, handler}
+    public Object hookSensorRegister4Handler(Object[] args) {
+        logSensor(args[2], args[3] != null ? ((Number) args[3]).intValue() : -1);
+        return backupSensorRegister4Handler != null
+                ? safeInvokeObject(backupSensorRegister4Handler, args[0], args[1], args[2], args[3], args[4])
+                : Boolean.FALSE;
     }
 }

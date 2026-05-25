@@ -265,5 +265,21 @@ void install_device_id_hooks(JNIEnv* env) {
         "okhttp3/OkHttpClient", "newCall", "(Lokhttp3/Request;)Lokhttp3/Call;",
         "hookOkHttpNewCall", kCbSig, "backupOkHttpNewCall", false, true);
 
+    // Phase 6: sensors
+    hook_one(env, hooker_obj, hooker_class,
+        "android/hardware/SensorManager", "registerListener",
+        "(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;I)Z",
+        "hookSensorRegister3", kCbSig, "backupSensorRegister3", false);
+
+    hook_one(env, hooker_obj, hooker_class,
+        "android/hardware/SensorManager", "registerListener",
+        "(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;II)Z",
+        "hookSensorRegister4Int", kCbSig, "backupSensorRegister4Int", false);
+
+    hook_one(env, hooker_obj, hooker_class,
+        "android/hardware/SensorManager", "registerListener",
+        "(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;ILandroid/os/Handler;)Z",
+        "hookSensorRegister4Handler", kCbSig, "backupSensorRegister4Handler", false);
+
     LOGI("hooks: device id hooks installed");
 }
