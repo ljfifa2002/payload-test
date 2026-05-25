@@ -182,7 +182,9 @@ static void* patch_level2_entry(void* stub_ep, void* hook_fn) {
     if (mprotect(reinterpret_cast<void*>(page), 0x1000,
                  PROT_READ | PROT_WRITE) == 0) {
         *ep_slot = hook_fn;
-        mprotect(reinterpret_cast<void*>(page), 0x1000, PROT_READ);
+        // Do NOT restore PROT_READ: on non-Oplus devices the JIT must be able to
+        // update this slot when it compiles the method, or it will SEGV_ACCERR.
+        // On Oplus the ART hardening prevents JIT from overwriting us anyway.
         LOGI("art_hooks: patched Level2+24 via mprotect -> %p", hook_fn);
         return orig;
     }
