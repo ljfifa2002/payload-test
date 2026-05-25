@@ -158,59 +158,44 @@ void install_device_id_hooks(JNIEnv* env) {
     jobject hooker_global = env->NewGlobalRef(hooker_obj);
     (void)hooker_global;
 
-    // 1. TelephonyManager.getDeviceId() -> String  [instance target]
-    // callback(hooker, thiz)
+    // LSPlant 6.4 always dispatches via ([Ljava/lang/Object;)Ljava/lang/Object;
+    // args = [hookerInstance, thiz, param1, param2, ...] for instance methods
+    // args = [hookerInstance, param1, param2, ...]       for static methods
+    static const char* kCbSig = "([Ljava/lang/Object;)Ljava/lang/Object;";
+
     hook_one(env, hooker_obj, hooker_class,
         "android/telephony/TelephonyManager", "getDeviceId", "()Ljava/lang/String;",
-        "hookGetDeviceId", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/String;",
-        "backupGetDeviceId", false);
+        "hookGetDeviceId", kCbSig, "backupGetDeviceId", false);
 
-    // 2. TelephonyManager.getSubscriberId() -> String
     hook_one(env, hooker_obj, hooker_class,
         "android/telephony/TelephonyManager", "getSubscriberId", "()Ljava/lang/String;",
-        "hookGetSubscriberId", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/String;",
-        "backupGetSubscriberId", false);
+        "hookGetSubscriberId", kCbSig, "backupGetSubscriberId", false);
 
-    // 3. TelephonyManager.getSimSerialNumber() -> String
     hook_one(env, hooker_obj, hooker_class,
         "android/telephony/TelephonyManager", "getSimSerialNumber", "()Ljava/lang/String;",
-        "hookGetSimSerialNumber", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/String;",
-        "backupGetSimSerialNumber", false);
+        "hookGetSimSerialNumber", kCbSig, "backupGetSimSerialNumber", false);
 
-    // 4. TelephonyManager.getLine1Number() -> String
     hook_one(env, hooker_obj, hooker_class,
         "android/telephony/TelephonyManager", "getLine1Number", "()Ljava/lang/String;",
-        "hookGetLine1Number", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/String;",
-        "backupGetLine1Number", false);
+        "hookGetLine1Number", kCbSig, "backupGetLine1Number", false);
 
-    // 5. Settings.Secure.getString(ContentResolver, String) -> String  [static target]
-    // callback(hooker, cr, name)
     hook_one(env, hooker_obj, hooker_class,
         "android/provider/Settings$Secure",
         "getString",
         "(Landroid/content/ContentResolver;Ljava/lang/String;)Ljava/lang/String;",
-        "hookSettingsSecureGetString",
-        "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/String;",
-        "backupSettingsSecureGetString", true);
+        "hookSettingsSecureGetString", kCbSig, "backupSettingsSecureGetString", true);
 
-    // 6a. WifiInfo.getMacAddress() -> String
     hook_one(env, hooker_obj, hooker_class,
         "android/net/wifi/WifiInfo", "getMacAddress", "()Ljava/lang/String;",
-        "hookGetMacAddress", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/String;",
-        "backupWifiGetMacAddress", false);
+        "hookGetMacAddress", kCbSig, "backupWifiGetMacAddress", false);
 
-    // 6b. NetworkInterface.getHardwareAddress() -> byte[]
     hook_one(env, hooker_obj, hooker_class,
         "java/net/NetworkInterface", "getHardwareAddress", "()[B",
-        "hookGetHardwareAddress", "(Ljava/lang/Object;Ljava/lang/Object;)[B",
-        "backupNetworkInterfaceGetHardwareAddress", false);
+        "hookGetHardwareAddress", kCbSig, "backupNetworkInterfaceGetHardwareAddress", false);
 
-    // DIAGNOSTIC: Activity.onCreate(Bundle) -> void
     hook_one(env, hooker_obj, hooker_class,
         "android/app/Activity", "onCreate", "(Landroid/os/Bundle;)V",
-        "hookActivityOnCreate",
-        "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)V",
-        "backupActivityOnCreate", false);
+        "hookActivityOnCreate", kCbSig, "backupActivityOnCreate", false);
 
     LOGI("hooks: device id hooks installed");
 }

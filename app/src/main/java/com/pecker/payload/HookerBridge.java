@@ -15,23 +15,22 @@ public class HookerBridge {
     public Method backupSettingsSecureGetString;
     public Method backupWifiGetMacAddress;
     public Method backupNetworkInterfaceGetHardwareAddress;
-    public Method backupActivityOnCreate;  // diagnostic
+    public Method backupActivityOnCreate;
 
-    // ---- diagnostic: Activity.onCreate ----
-    public static void hookActivityOnCreate(Object hooker, Object thiz, Object bundle) {
-        Log.i(TAG, "[probe] Activity.onCreate fired in pid=" + android.os.Process.myPid());
-        HookerBridge h = (HookerBridge) hooker;
-        if (h.backupActivityOnCreate != null) {
-            try { h.backupActivityOnCreate.invoke(thiz, bundle); }
-            catch (Exception e) { Log.e(TAG, "backup Activity.onCreate failed: " + e); }
-        }
-    }
+    // LSPlant 6.4 dispatch convention:
+    //   callback(Object[] args) -> Object
+    //   args[0] = hooker instance (HookerBridge)
+    //   args[1] = thiz  (null for static target methods)
+    //   args[2..] = method parameters (for static: args[1..] = parameters)
+    //
+    // Instance target:  args = [hooker, thiz, param1, param2, ...]
+    // Static target:    args = [hooker, param1, param2, ...]
 
     // ---- helpers ----
 
-    private static String safeInvoke(Method m, Object thiz, Object... args) {
+    private static String safeInvoke(Method m, Object thiz, Object... params) {
         try {
-            return (String) m.invoke(thiz, args);
+            return (String) m.invoke(thiz, params);
         } catch (Exception e) {
             Log.e(TAG, "backup invoke failed: " + e);
             return null;
@@ -51,48 +50,49 @@ public class HookerBridge {
         Log.i(TAG, "{\"type\":\"behavior\",\"method\":\"" + method + "\",\"data\":\"" + data + "\",\"timestamp\":" + System.currentTimeMillis() + "}");
     }
 
-    // ---- Static callbacks (LSPlant requires static: first param = hooker object) ----
+    // ---- Static callbacks: all use ([Ljava/lang/Object;)Ljava/lang/Object; ----
 
-    // TelephonyManager.getDeviceId()
-    public static String hookGetDeviceId(Object hooker, Object thiz) {
-        Log.d(TAG, "[probe] hookGetDeviceId called");
-        HookerBridge h = (HookerBridge) hooker;
+    // TelephonyManager.getDeviceId()  [instance: args={hooker, thiz}]
+    public static Object hookGetDeviceId(Object[] args) {
+        HookerBridge h = (HookerBridge) args[0];
+        Object thiz = args[1];
         String v = h.backupGetDeviceId != null ? safeInvoke(h.backupGetDeviceId, thiz) : null;
         log("TelephonyManager.getDeviceId", v != null ? v : "");
         return v;
     }
 
     // TelephonyManager.getSubscriberId()
-    public static String hookGetSubscriberId(Object hooker, Object thiz) {
-        Log.d(TAG, "[probe] hookGetSubscriberId called");
-        HookerBridge h = (HookerBridge) hooker;
+    public static Object hookGetSubscriberId(Object[] args) {
+        HookerBridge h = (HookerBridge) args[0];
+        Object thiz = args[1];
         String v = h.backupGetSubscriberId != null ? safeInvoke(h.backupGetSubscriberId, thiz) : null;
         log("TelephonyManager.getSubscriberId", v != null ? v : "");
         return v;
     }
 
     // TelephonyManager.getSimSerialNumber()
-    public static String hookGetSimSerialNumber(Object hooker, Object thiz) {
-        Log.d(TAG, "[probe] hookGetSimSerialNumber called");
-        HookerBridge h = (HookerBridge) hooker;
+    public static Object hookGetSimSerialNumber(Object[] args) {
+        HookerBridge h = (HookerBridge) args[0];
+        Object thiz = args[1];
         String v = h.backupGetSimSerialNumber != null ? safeInvoke(h.backupGetSimSerialNumber, thiz) : null;
         log("TelephonyManager.getSimSerialNumber", v != null ? v : "");
         return v;
     }
 
     // TelephonyManager.getLine1Number()
-    public static String hookGetLine1Number(Object hooker, Object thiz) {
-        Log.d(TAG, "[probe] hookGetLine1Number called");
-        HookerBridge h = (HookerBridge) hooker;
+    public static Object hookGetLine1Number(Object[] args) {
+        HookerBridge h = (HookerBridge) args[0];
+        Object thiz = args[1];
         String v = h.backupGetLine1Number != null ? safeInvoke(h.backupGetLine1Number, thiz) : null;
         log("TelephonyManager.getLine1Number", v != null ? v : "");
         return v;
     }
 
-    // Settings.Secure.getString(ContentResolver, String)  [static target]
-    public static String hookSettingsSecureGetString(Object hooker, Object cr, String name) {
-        Log.d(TAG, "[probe] hookSettingsSecureGetString key=" + name);
-        HookerBridge h = (HookerBridge) hooker;
+    // Settings.Secure.getString(ContentResolver, String)  [static: args={hooker, cr, name}]
+    public static Object hookSettingsSecureGetString(Object[] args) {
+        HookerBridge h = (HookerBridge) args[0];
+        Object cr   = args[1];
+        String name = (String) args[2];
         String v = h.backupSettingsSecureGetString != null
                 ? safeInvoke(h.backupSettingsSecureGetString, null, cr, name)
                 : null;
@@ -101,18 +101,18 @@ public class HookerBridge {
     }
 
     // WifiInfo.getMacAddress()
-    public static String hookGetMacAddress(Object hooker, Object thiz) {
-        Log.d(TAG, "[probe] hookGetMacAddress called");
-        HookerBridge h = (HookerBridge) hooker;
+    public static Object hookGetMacAddress(Object[] args) {
+        HookerBridge h = (HookerBridge) args[0];
+        Object thiz = args[1];
         String v = h.backupWifiGetMacAddress != null ? safeInvoke(h.backupWifiGetMacAddress, thiz) : null;
         log("WifiInfo.getMacAddress", v != null ? v : "");
         return v;
     }
 
-    // NetworkInterface.getHardwareAddress()
-    public static byte[] hookGetHardwareAddress(Object hooker, Object thiz) {
-        Log.d(TAG, "[probe] hookGetHardwareAddress called");
-        HookerBridge h = (HookerBridge) hooker;
+    // NetworkInterface.getHardwareAddress()  -> byte[]
+    public static Object hookGetHardwareAddress(Object[] args) {
+        HookerBridge h = (HookerBridge) args[0];
+        Object thiz = args[1];
         byte[] v = h.backupNetworkInterfaceGetHardwareAddress != null
                 ? safeInvokeBytes(h.backupNetworkInterfaceGetHardwareAddress, thiz)
                 : null;
@@ -125,5 +125,18 @@ public class HookerBridge {
             log("NetworkInterface.getHardwareAddress", sb.toString());
         }
         return v;
+    }
+
+    // Activity.onCreate(Bundle)  [instance: args={hooker, thiz, bundle}]
+    public static Object hookActivityOnCreate(Object[] args) {
+        Log.i(TAG, "[probe] Activity.onCreate fired in pid=" + android.os.Process.myPid());
+        HookerBridge h = (HookerBridge) args[0];
+        Object thiz   = args[1];
+        Object bundle = args[2];
+        if (h.backupActivityOnCreate != null) {
+            try { h.backupActivityOnCreate.invoke(thiz, bundle); }
+            catch (Exception e) { Log.e(TAG, "backup Activity.onCreate failed: " + e); }
+        }
+        return null;
     }
 }
