@@ -202,6 +202,51 @@ static void* patch_level2_entry(void* stub_ep, void* hook_fn) {
 }
 
 // ---------------------------------------------------------------------------
+// ART Thread* preservation helpers
+//
+// When our hook is called, X19 = ART Thread* (set by the runtime).
+// The C compiler may clobber X19 before we call orig (e.g. to spill `am`).
+// We capture X19 at hook entry and pass it as an extra arg to invoke_art_*
+// which restores it into X19 just before branching to orig.
+//
+// invoke_art_2arg(orig, x0, x1, thread_ptr):
+//   x0=am, x1=this  -> return void*
+// invoke_art_3arg(orig, x0, x1, x2, thread_ptr):
+//   x0=am, x1=arg0, x2=arg1 -> return void*
+// ---------------------------------------------------------------------------
+
+__attribute__((naked))
+static void* invoke_art_2arg(void* orig, void* x0, void* x1, void* thread_ptr) {
+    // ARM64 calling convention on entry:
+    //   x0=orig, x1=arg_x0, x2=arg_x1, x3=thread_ptr
+    asm volatile(
+        "mov x16, x0\n"   // x16 = orig fn ptr
+        "mov x0,  x1\n"   // x0  = am (Level2*)
+        "mov x1,  x2\n"   // x1  = this
+        "mov x19, x3\n"   // x19 = Thread*  (restored before call)
+        "br  x16\n"       // tail-call: return value in x0 goes to caller
+    );
+}
+
+__attribute__((naked))
+static void* invoke_art_3arg(void* orig, void* x0, void* x1, void* x2, void* thread_ptr) {
+    // x0=orig, x1=arg_x0, x2=arg_x1, x3=arg_x2, x4=thread_ptr
+    asm volatile(
+        "mov x16, x0\n"
+        "mov x0,  x1\n"   // x0 = am
+        "mov x1,  x2\n"   // x1 = arg0 (cr)
+        "mov x2,  x3\n"   // x2 = arg1 (key)
+        "mov x19, x4\n"   // x19 = Thread*
+        "br  x16\n"
+    );
+}
+
+// Capture X19 (ART Thread*) at the very start of a hook function.
+#define READ_THREAD_PTR(var) \
+    void* var; \
+    asm volatile("mov %0, x19" : "=r"(var))
+
+// ---------------------------------------------------------------------------
 // JNI helpers
 // ---------------------------------------------------------------------------
 static JavaVM* g_vm = nullptr;
@@ -247,49 +292,56 @@ static FnArtInst   orig_getMacAddress      = nullptr;
 static FnArtInst   orig_getHardwareAddress = nullptr;
 
 static void* hook_getDeviceId(void* am, void* thiz) {
-    void* ret = orig_getDeviceId ? orig_getDeviceId(am, thiz) : nullptr;
+    READ_THREAD_PTR(tp);
+    void* ret = orig_getDeviceId ? invoke_art_2arg((void*)orig_getDeviceId, am, thiz, tp) : nullptr;
     JNIEnv* env = nullptr;
     if (get_env(&env) == JNI_OK)
         emit("TelephonyManager.getDeviceId", jstring_val(env, ret).c_str());
     return ret;
 }
 static void* hook_getSubscriberId(void* am, void* thiz) {
-    void* ret = orig_getSubscriberId ? orig_getSubscriberId(am, thiz) : nullptr;
+    READ_THREAD_PTR(tp);
+    void* ret = orig_getSubscriberId ? invoke_art_2arg((void*)orig_getSubscriberId, am, thiz, tp) : nullptr;
     JNIEnv* env = nullptr;
     if (get_env(&env) == JNI_OK)
         emit("TelephonyManager.getSubscriberId", jstring_val(env, ret).c_str());
     return ret;
 }
 static void* hook_getSimSerialNumber(void* am, void* thiz) {
-    void* ret = orig_getSimSerialNumber ? orig_getSimSerialNumber(am, thiz) : nullptr;
+    READ_THREAD_PTR(tp);
+    void* ret = orig_getSimSerialNumber ? invoke_art_2arg((void*)orig_getSimSerialNumber, am, thiz, tp) : nullptr;
     JNIEnv* env = nullptr;
     if (get_env(&env) == JNI_OK)
         emit("TelephonyManager.getSimSerialNumber", jstring_val(env, ret).c_str());
     return ret;
 }
 static void* hook_getLine1Number(void* am, void* thiz) {
-    void* ret = orig_getLine1Number ? orig_getLine1Number(am, thiz) : nullptr;
+    READ_THREAD_PTR(tp);
+    void* ret = orig_getLine1Number ? invoke_art_2arg((void*)orig_getLine1Number, am, thiz, tp) : nullptr;
     JNIEnv* env = nullptr;
     if (get_env(&env) == JNI_OK)
         emit("TelephonyManager.getLine1Number", jstring_val(env, ret).c_str());
     return ret;
 }
 static void* hook_settingsGetString(void* am, void* cr, void* key) {
-    void* ret = orig_settingsGetString ? orig_settingsGetString(am, cr, key) : nullptr;
+    READ_THREAD_PTR(tp);
+    void* ret = orig_settingsGetString ? invoke_art_3arg((void*)orig_settingsGetString, am, cr, key, tp) : nullptr;
     JNIEnv* env = nullptr;
     if (get_env(&env) == JNI_OK)
         emit("Settings.Secure.getString", (jstring_val(env, key) + "=" + jstring_val(env, ret)).c_str());
     return ret;
 }
 static void* hook_getMacAddress(void* am, void* thiz) {
-    void* ret = orig_getMacAddress ? orig_getMacAddress(am, thiz) : nullptr;
+    READ_THREAD_PTR(tp);
+    void* ret = orig_getMacAddress ? invoke_art_2arg((void*)orig_getMacAddress, am, thiz, tp) : nullptr;
     JNIEnv* env = nullptr;
     if (get_env(&env) == JNI_OK)
         emit("WifiInfo.getMacAddress", jstring_val(env, ret).c_str());
     return ret;
 }
 static void* hook_getHardwareAddress(void* am, void* thiz) {
-    void* ret = orig_getHardwareAddress ? orig_getHardwareAddress(am, thiz) : nullptr;
+    READ_THREAD_PTR(tp);
+    void* ret = orig_getHardwareAddress ? invoke_art_2arg((void*)orig_getHardwareAddress, am, thiz, tp) : nullptr;
     emit("NetworkInterface.getHardwareAddress", "called");
     return ret;
 }
