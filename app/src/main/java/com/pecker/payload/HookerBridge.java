@@ -690,6 +690,7 @@ public class HookerBridge {
     }
 
 
+    private static String sensorTypeName(int type) {
         switch (type) {
             case 1:  return "ACCELEROMETER";
             case 2:  return "MAGNETIC_FIELD";
