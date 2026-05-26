@@ -310,5 +310,23 @@ void install_device_id_hooks(JNIEnv* env) {
         "(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;ILandroid/os/Handler;)Z",
         "hookSensorRegister4Handler", kCbSig, "backupSensorRegister4Handler", false);
 
+    // Phase 7: permission requests
+    hook_one(env, hooker_obj, hooker_class,
+        "android/app/Activity", "requestPermissions",
+        "([Ljava/lang/String;I)V",
+        "hookRequestPermissions", kCbSig, "backupRequestPermissions", false);
+
+    hook_one(env, hooker_obj, hooker_class,
+        "android/app/Activity", "checkSelfPermission",
+        "(Ljava/lang/String;)I",
+        "hookCheckSelfPermission", kCbSig, "backupCheckSelfPermission", false);
+
+    // ActivityCompat.requestPermissions — optional, only if androidx is bundled
+    hook_one(env, hooker_obj, hooker_class,
+        "androidx/core/app/ActivityCompat", "requestPermissions",
+        "(Landroid/app/Activity;[Ljava/lang/String;I)V",
+        "hookActivityCompatRequestPermissions", kCbSig,
+        "backupActivityCompatRequestPermissions", true, true);
+
     LOGI("hooks: device id hooks installed");
 }

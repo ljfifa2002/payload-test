@@ -29,6 +29,10 @@ public class HookerBridge {
     public Method backupSensorRegister3;
     public Method backupSensorRegister4Int;
     public Method backupSensorRegister4Handler;
+    // Phase 7: permissions
+    public Method backupRequestPermissions;
+    public Method backupCheckSelfPermission;
+    public Method backupActivityCompatRequestPermissions;
 
     // LSPlant 6.4 calls the hooker as a virtual (instance) method:
     //   hookerInstance.hookXxx(Object[] args)
@@ -311,5 +315,53 @@ public class HookerBridge {
         return backupSensorRegister4Handler != null
                 ? safeInvokeObject(backupSensorRegister4Handler, args[0], args[1], args[2], args[3], args[4])
                 : Boolean.FALSE;
+    }
+
+    // ---- Phase 7: permission requests ----
+
+    // Activity.requestPermissions(String[] perms, int requestCode)  instance: args={thiz, perms, code}
+    public Object hookRequestPermissions(Object[] args) {
+        try {
+            Object[] perms = (Object[]) args[1];
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < perms.length; i++) {
+                if (i > 0) sb.append(',');
+                sb.append(perms[i]);
+            }
+            log("Activity.requestPermissions", sb.toString());
+        } catch (Exception e) { log("Activity.requestPermissions", "?"); }
+        if (backupRequestPermissions != null)
+            safeInvokeObject(backupRequestPermissions, args[0], args[1], args[2]);
+        return null;
+    }
+
+    // Activity.checkSelfPermission(String permission)  instance: args={thiz, permission}
+    public Object hookCheckSelfPermission(Object[] args) {
+        String perm = args[1] != null ? args[1].toString() : "";
+        Integer result = null;
+        if (backupCheckSelfPermission != null) {
+            try { result = (Integer) backupCheckSelfPermission.invoke(args[0], perm); }
+            catch (Exception e) { Log.e(TAG, "backup checkSelfPermission failed: " + e); }
+        }
+        // Only log denials (result != 0) to reduce noise
+        int r = result != null ? result : -1;
+        if (r != 0) log("Activity.checkSelfPermission", perm + "=DENIED");
+        return result != null ? result : -1;
+    }
+
+    // ActivityCompat.requestPermissions(Activity, String[], int)  static: args={activity, perms, code}
+    public Object hookActivityCompatRequestPermissions(Object[] args) {
+        try {
+            Object[] perms = (Object[]) args[1];
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < perms.length; i++) {
+                if (i > 0) sb.append(',');
+                sb.append(perms[i]);
+            }
+            log("ActivityCompat.requestPermissions", sb.toString());
+        } catch (Exception e) { log("ActivityCompat.requestPermissions", "?"); }
+        if (backupActivityCompatRequestPermissions != null)
+            safeInvokeObject(backupActivityCompatRequestPermissions, null, args[0], args[1], args[2]);
+        return null;
     }
 }

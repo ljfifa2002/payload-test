@@ -67,6 +67,16 @@
 
 ---
 
+## 分类六：权限申请
+
+| # | Java API | JNI 签名 | 静态 | 捕获内容 | 日志 method 字段 |
+|---|----------|---------|------|---------|-----------------|
+| 22 | `android.app.Activity.requestPermissions(String[], int)` | `([Ljava/lang/String;I)V` | 否 | 申请的权限列表（逗号分隔） | `Activity.requestPermissions` |
+| 23 | `android.app.Activity.checkSelfPermission(String)` | `(Ljava/lang/String;)I` | 否 | 被查询的权限名（仅记录结果为 DENIED 的） | `Activity.checkSelfPermission` |
+| 24 | `androidx.core.app.ActivityCompat.requestPermissions(Activity, String[], int)` | `(Landroid/app/Activity;[Ljava/lang/String;I)V` | 是 | 申请的权限列表（App 未打包 androidx 时自动跳过） | `ActivityCompat.requestPermissions` |
+
+---
+
 ## 传感器类型编号映射
 
 | 编号 | 常量名 | 说明 |
