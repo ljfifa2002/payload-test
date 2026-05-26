@@ -80,11 +80,19 @@ static void payload_init() {
     }
     LOGI("lsplant::Init ok");
 
-    // DIAGNOSIS-2: keep lsplant::Init but disable all hook installation.
-    // If App starts normally: detection is ArtMethod entry_point modification.
-    // If App still white-screens: detection is anonymous exec mappings or lsplant::Init state.
+    // DIAGNOSIS-3: skip lsplant::Init entirely. Tests if lsplant's internal
+    // ART hooks (applied during Init via proxy_hook) are the detection trigger.
+    // If App starts normally: lsplant::Init modifying libart.so is the issue.
+    // If App still white-screens: shadowhook_init or anonymous exec segments.
+    //
+    // void* libart = shadowhook_dlopen("libart.so");
+    // lsplant::InitInfo info{ ... };
+    // bool lsp_ok = lsplant::Init(env, info);
+    // if (!lsp_ok) { ... }
+    // LOGI("lsplant::Init ok");
+
     // install_device_id_hooks(env);
     // install_art_inline_hooks(env, vm);
     // install_ssl_hooks();
-    LOGI("payload init ok");
+    LOGI("payload init ok - diag3: shadowhook only, no lsplant");
 }
