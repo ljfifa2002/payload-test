@@ -248,6 +248,10 @@ void install_device_id_hooks(JNIEnv* env) {
         "java/net/NetworkInterface", "getHardwareAddress", "()[B",
         "hookGetHardwareAddress", kCbSig, "backupNetworkInterfaceGetHardwareAddress", false);
 
+    hook_one(env, hooker_obj, hooker_class,
+        "android/app/Activity", "onCreate", "(Landroid/os/Bundle;)V",
+        "hookActivityOnCreate", kCbSig, "backupActivityOnCreate", false);
+
     // Activity.onCreate hook removed — fires on all Activities including the app's
     // own MainActivity; returning null for a void method disrupts super.onCreate()
     // call chains and causes white-screen hangs on apps with anti-tamper checks.

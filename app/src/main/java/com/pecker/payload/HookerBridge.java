@@ -126,9 +126,11 @@ public class HookerBridge {
 
     // Activity.onCreate(Bundle)  instance: args={thiz, bundle}
     public Object hookActivityOnCreate(Object[] args) {
-        Log.i(TAG, "[probe] Activity.onCreate fired in pid=" + android.os.Process.myPid());
         Object thiz   = args[0];
         Object bundle = args[1];
+        // Log the activity class name in unified JSON format
+        String activityName = thiz != null ? thiz.getClass().getName() : "?";
+        log("Activity.onCreate", activityName);
         if (backupActivityOnCreate != null) {
             try { backupActivityOnCreate.invoke(thiz, bundle); }
             catch (Exception e) { Log.e(TAG, "backup Activity.onCreate failed: " + e); }
