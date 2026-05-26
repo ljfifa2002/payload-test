@@ -92,31 +92,54 @@ static int hook_ssl_read(SSL* ssl, void* buf, int num) {
 }
 
 void install_ssl_hooks() {
-    // Resolve SSL_get_servername for SNI hostname extraction.
-    void* libssl = shadowhook_dlopen("libssl.so");
-    if (libssl) {
-        fn_get_servname = reinterpret_cast<ssl_get_servname_t>(
-            shadowhook_dlsym_symtab(libssl, "SSL_get_servername"));
-        if (!fn_get_servname)
-            fn_get_servname = reinterpret_cast<ssl_get_servname_t>(
-                dlsym(libssl, "SSL_get_servername"));
-        if (fn_get_servname) LOGI("ssl_hooks: SSL_get_servername resolved");
-        else                 LOGI("ssl_hooks: SSL_get_servername not found, host='?'");
-    } else {
-        LOGE("ssl_hooks: shadowhook_dlopen(libssl.so) failed");
+    // Use RTLD_NOLOAD to check if libssl.so is already mapped into this process.
+    // At early app startup the network stack may not have loaded it yet; hooking
+    // a not-yet-loaded library via shadowhook_hook_sym_name blocks indefinitely.
+    // If absent, skip silently — the library will not be used before our process
+    // exits anyway (no network calls have happened yet at this point).
+    void* libssl = dlopen("libssl.so", RTLD_NOLOAD | RTLD_NOW);
+    if (!libssl) {
+        LOGI("ssl_hooks: libssl.so not loaded yet, skipping SSL hooks");
+        return;
     }
 
-    void* stub_w = shadowhook_hook_sym_name(
-        "libssl.so", "SSL_write",
-        (void*)hook_ssl_write, (void**)&orig_ssl_write);
-    if (stub_w) LOGI("ssl_hooks: SSL_write hooked");
-    else        LOGE("ssl_hooks: SSL_write hook failed: %s",
-                     shadowhook_to_errmsg(shadowhook_get_errno()));
+    // Resolve SSL_get_servername for SNI hostname extraction.
+    fn_get_servname = reinterpret_cast<ssl_get_servname_t>(
+        shadowhook_dlsym_symtab(libssl, "SSL_get_servername"));
+    if (!fn_get_servname)
+        fn_get_servname = reinterpret_cast<ssl_get_servname_t>(
+            dlsym(libssl, "SSL_get_servername"));
+    if (fn_get_servname) LOGI("ssl_hooks: SSL_get_servername resolved");
+    else                 LOGI("ssl_hooks: SSL_get_servername not found, host='?'");
 
-    void* stub_r = shadowhook_hook_sym_name(
-        "libssl.so", "SSL_read",
-        (void*)hook_ssl_read, (void**)&orig_ssl_read);
-    if (stub_r) LOGI("ssl_hooks: SSL_read hooked");
-    else        LOGE("ssl_hooks: SSL_read hook failed: %s",
-                     shadowhook_to_errmsg(shadowhook_get_errno()));
+    // Hook by resolved address to avoid shadowhook_hook_sym_name's lazy-load wait.
+    orig_ssl_write = reinterpret_cast<ssl_write_t>(
+        shadowhook_dlsym_symtab(libssl, "SSL_write"));
+    if (!orig_ssl_write)
+        orig_ssl_write = reinterpret_cast<ssl_write_t>(dlsym(libssl, "SSL_write"));
+
+    orig_ssl_read = reinterpret_cast<ssl_read_t>(
+        shadowhook_dlsym_symtab(libssl, "SSL_read"));
+    if (!orig_ssl_read)
+        orig_ssl_read = reinterpret_cast<ssl_read_t>(dlsym(libssl, "SSL_read"));
+
+    if (orig_ssl_write) {
+        void* real_orig_w = nullptr;
+        void* stub_w = shadowhook_hook_func_addr(
+            (void*)orig_ssl_write, (void*)hook_ssl_write, &real_orig_w);
+        if (stub_w) { orig_ssl_write = reinterpret_cast<ssl_write_t>(real_orig_w);
+                      LOGI("ssl_hooks: SSL_write hooked"); }
+        else        LOGE("ssl_hooks: SSL_write hook failed: %s",
+                         shadowhook_to_errmsg(shadowhook_get_errno()));
+    } else LOGI("ssl_hooks: SSL_write symbol not found");
+
+    if (orig_ssl_read) {
+        void* real_orig_r = nullptr;
+        void* stub_r = shadowhook_hook_func_addr(
+            (void*)orig_ssl_read, (void*)hook_ssl_read, &real_orig_r);
+        if (stub_r) { orig_ssl_read = reinterpret_cast<ssl_read_t>(real_orig_r);
+                      LOGI("ssl_hooks: SSL_read hooked"); }
+        else        LOGE("ssl_hooks: SSL_read hook failed: %s",
+                         shadowhook_to_errmsg(shadowhook_get_errno()));
+    } else LOGI("ssl_hooks: SSL_read symbol not found");
 }
