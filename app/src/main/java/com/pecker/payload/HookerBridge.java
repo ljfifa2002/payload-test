@@ -36,6 +36,8 @@ public class HookerBridge {
     public Method backupUrlOpenConnection;
     public Method backupOkHttpNewCall;
     public Method backupRealCallExecute;
+    public Method backupRealCallEnqueue;
+    public Method backupVolleyDeliverResponse;
     // Phase 6: sensors
     public Method backupSensorRegister3;
     public Method backupSensorRegister4Int;
@@ -392,7 +394,83 @@ public class HookerBridge {
         return response;
     }
 
+    // RealCall.enqueue(Callback)  instance: args={thiz, callback}
+    // Wraps the original Callback in a java.lang.reflect.Proxy to intercept
+    // onResponse/onFailure so we can log URL + response code asynchronously.
+    public Object hookRealCallEnqueue(Object[] args) {
+        Object realCall = args[0];
+        Object origCallback = args[1];
+        String url;
+        try {
+            Object request = realCall.getClass().getMethod("request").invoke(realCall);
+            url = request.getClass().getMethod("url").invoke(request).toString();
+        } catch (Exception e) {
+            url = "?";
+        }
+        final String capturedUrl = url;
 
+        // Build a proxy that implements okhttp3.Callback
+        Object wrappedCallback = origCallback;
+        if (origCallback != null) {
+            try {
+                Class<?>[] ifaces = { origCallback.getClass().getInterfaces()[0] };
+                // Walk up to find okhttp3.Callback interface
+                Class<?> cls = origCallback.getClass();
+                Class<?> callbackIface = null;
+                outer:
+                for (; cls != null; cls = cls.getSuperclass()) {
+                    for (Class<?> iface : cls.getInterfaces()) {
+                        if (iface.getName().equals("okhttp3.Callback")) {
+                            callbackIface = iface;
+                            break outer;
+                        }
+                    }
+                }
+                if (callbackIface != null) {
+                    final Object finalOrig = origCallback;
+                    final Class<?> finalIface = callbackIface;
+                    wrappedCallback = java.lang.reflect.Proxy.newProxyInstance(
+                        origCallback.getClass().getClassLoader(),
+                        new Class<?>[]{ finalIface },
+                        (proxy, method, methodArgs) -> {
+                            String mname = method.getName();
+                            if ("onResponse".equals(mname) && methodArgs != null && methodArgs.length >= 2) {
+                                try {
+                                    int code = (Integer) methodArgs[1].getClass()
+                                            .getMethod("code").invoke(methodArgs[1]);
+                                    log("OkHttp3.RealCall.enqueue", capturedUrl + " code=" + code);
+                                } catch (Exception ignored) {
+                                    log("OkHttp3.RealCall.enqueue", capturedUrl + " onResponse");
+                                }
+                            } else if ("onFailure".equals(mname)) {
+                                log("OkHttp3.RealCall.enqueue", capturedUrl + " onFailure");
+                            }
+                            return method.invoke(finalOrig, methodArgs);
+                        });
+                }
+            } catch (Exception e) {
+                log("OkHttp3.RealCall.enqueue", capturedUrl + " proxy-wrap-failed");
+            }
+        }
+
+        if (backupRealCallEnqueue != null)
+            safeInvokeObject(backupRealCallEnqueue, realCall, wrappedCallback);
+        return null;
+    }
+
+    // Volley StringRequest.deliverResponse(String)  instance: args={thiz, response}
+    private static final int VOLLEY_PREVIEW = 256;
+    public Object hookVolleyDeliverResponse(Object[] args) {
+        String body = args[1] != null ? args[1].toString() : "";
+        if (body.length() > VOLLEY_PREVIEW) body = body.substring(0, VOLLEY_PREVIEW) + "...";
+        // Escape JSON special chars minimally
+        body = body.replace("\\", "\\\\").replace("\"", "\\\"")
+                   .replace("\r", " ").replace("\n", " ").replace("\t", " ");
+        log("Volley.StringRequest.deliverResponse", body);
+        if (backupVolleyDeliverResponse != null)
+            safeInvokeObject(backupVolleyDeliverResponse, args[0], args[1]);
+        return null;
+    }
 
     private static String sensorTypeName(int type) {
         switch (type) {

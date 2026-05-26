@@ -348,6 +348,16 @@ void install_device_id_hooks(JNIEnv* env) {
         "()Lokhttp3/Response;",
         "hookRealCallExecute", kCbSig, "backupRealCallExecute", false, true);
 
+    hook_one(env, hooker_obj, hooker_class,
+        "okhttp3/RealCall", "enqueue",
+        "(Lokhttp3/Callback;)V",
+        "hookRealCallEnqueue", kCbSig, "backupRealCallEnqueue", false, true);
+
+    // Volley — optional, only if com.android.volley is bundled
+    hook_one(env, hooker_obj, hooker_class,
+        "com/android/volley/toolbox/StringRequest", "deliverResponse",
+        "(Ljava/lang/String;)V",
+        "hookVolleyDeliverResponse", kCbSig, "backupVolleyDeliverResponse", false, true);
 
     hook_one(env, hooker_obj, hooker_class,
         "android/hardware/SensorManager", "registerListener",

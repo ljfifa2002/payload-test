@@ -59,9 +59,11 @@
 |---|----------|---------|------|---------|-----------------|
 | 24 | `java.net.URL.openConnection()` | `()Ljava/net/URLConnection;` | 否 | 请求 URL 字符串 | `URL.openConnection` |
 | 25 | `okhttp3.OkHttpClient.newCall(Request)` | `(Lokhttp3/Request;)Lokhttp3/Call;` | 否 | OkHttp 请求 URL（App 未打包 OkHttp3 时自动跳过） | `OkHttpClient.newCall` |
-| 26 | `okhttp3.RealCall.execute()` | `()Lokhttp3/Response;` | 否 | OkHttp 同步请求 URL + 响应状态码（App 未打包 OkHttp3 时自动跳过） | `OkHttp3.RealCall.execute` |
-| 27 | `libssl.so SSL_write(SSL*, const void*, int)` | native | — | SNI host + 明文长度 + 前128字节预览（文本/hex） | `SSL_write` |
-| 28 | `libssl.so SSL_read(SSL*, void*, int)` | native | — | SNI host + 明文长度 + 前128字节预览（文本/hex） | `SSL_read` |
+| 26 | `okhttp3.RealCall.execute()` | `()Lokhttp3/Response;` | 否 | OkHttp 同步请求 URL + 响应状态码 | `OkHttp3.RealCall.execute` |
+| 27 | `okhttp3.RealCall.enqueue(Callback)` | `(Lokhttp3/Callback;)V` | 否 | OkHttp 异步请求 URL + 响应状态码（通过 Callback Proxy 拦截） | `OkHttp3.RealCall.enqueue` |
+| 28 | `com.android.volley.toolbox.StringRequest.deliverResponse(String)` | `(Ljava/lang/String;)V` | 否 | Volley 响应体前 256 字符（App 未打包 Volley 时自动跳过） | `Volley.StringRequest.deliverResponse` |
+| 29 | `libssl.so SSL_write(SSL*, const void*, int)` | native | — | SNI host + 明文长度 + 前128字节预览（文本/hex） | `SSL_write` |
+| 30 | `libssl.so SSL_read(SSL*, void*, int)` | native | — | SNI host + 明文长度 + 前128字节预览（文本/hex） | `SSL_read` |
 
 ---
 
@@ -71,9 +73,9 @@
 
 | # | Java API | JNI 签名 | 静态 | 捕获内容 | 日志 method 字段 |
 |---|----------|---------|------|---------|-----------------|
-| 29 | `android.hardware.SensorManager.registerListener(SensorEventListener, Sensor, int)` | `(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;I)Z` | 否 | 传感器类型编号 + 类型名 + 硬件名称 + 采样率 | `SensorManager.registerListener` |
-| 30 | `android.hardware.SensorManager.registerListener(SensorEventListener, Sensor, int, int)` | `(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;II)Z` | 否 | 同上 + 最大延迟（maxLatency） | `SensorManager.registerListener` |
-| 31 | `android.hardware.SensorManager.registerListener(SensorEventListener, Sensor, int, Handler)` | `(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;ILandroid/os/Handler;)Z` | 否 | 同上 + Handler | `SensorManager.registerListener` |
+| 31 | `android.hardware.SensorManager.registerListener(SensorEventListener, Sensor, int)` | `(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;I)Z` | 否 | 传感器类型编号 + 类型名 + 硬件名称 + 采样率 | `SensorManager.registerListener` |
+| 32 | `android.hardware.SensorManager.registerListener(SensorEventListener, Sensor, int, int)` | `(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;II)Z` | 否 | 同上 + 最大延迟（maxLatency） | `SensorManager.registerListener` |
+| 33 | `android.hardware.SensorManager.registerListener(SensorEventListener, Sensor, int, Handler)` | `(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;ILandroid/os/Handler;)Z` | 否 | 同上 + Handler | `SensorManager.registerListener` |
 
 ---
 
@@ -81,9 +83,9 @@
 
 | # | Java API | JNI 签名 | 静态 | 捕获内容 | 日志 method 字段 |
 |---|----------|---------|------|---------|-----------------|
-| 32 | `android.app.Activity.requestPermissions(String[], int)` | `([Ljava/lang/String;I)V` | 否 | 申请的权限列表（逗号分隔） | `Activity.requestPermissions` |
-| 33 | `android.app.Activity.checkSelfPermission(String)` | `(Ljava/lang/String;)I` | 否 | 被查询的权限名（仅记录结果为 DENIED 的） | `Activity.checkSelfPermission` |
-| 34 | `androidx.core.app.ActivityCompat.requestPermissions(Activity, String[], int)` | `(Landroid/app/Activity;[Ljava/lang/String;I)V` | 是 | 申请的权限列表（App 未打包 androidx 时自动跳过） | `ActivityCompat.requestPermissions` |
+| 34 | `android.app.Activity.requestPermissions(String[], int)` | `([Ljava/lang/String;I)V` | 否 | 申请的权限列表（逗号分隔） | `Activity.requestPermissions` |
+| 35 | `android.app.Activity.checkSelfPermission(String)` | `(Ljava/lang/String;)I` | 否 | 被查询的权限名（仅记录结果为 DENIED 的） | `Activity.checkSelfPermission` |
+| 36 | `androidx.core.app.ActivityCompat.requestPermissions(Activity, String[], int)` | `(Landroid/app/Activity;[Ljava/lang/String;I)V` | 是 | 申请的权限列表（App 未打包 androidx 时自动跳过） | `ActivityCompat.requestPermissions` |
 
 ---
 
