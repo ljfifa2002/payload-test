@@ -80,8 +80,11 @@ static void payload_init() {
     }
     LOGI("lsplant::Init ok");
 
-    install_device_id_hooks(env);   // LSPlant path — works on non-Oplus
-    install_art_inline_hooks(env, vm); // ShadowHook inline path — bypasses Oplus watchdog
-    install_ssl_hooks();               // ShadowHook sym hook — SSL_read/SSL_write plaintext
+    // DIAGNOSIS-2: keep lsplant::Init but disable all hook installation.
+    // If App starts normally: detection is ArtMethod entry_point modification.
+    // If App still white-screens: detection is anonymous exec mappings or lsplant::Init state.
+    // install_device_id_hooks(env);
+    // install_art_inline_hooks(env, vm);
+    // install_ssl_hooks();
     LOGI("payload init ok");
 }
