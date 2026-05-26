@@ -22,9 +22,20 @@ public class HookerBridge {
     public Method backupContentResolverQuery;
     public Method backupCameraManagerOpenCamera;
     public Method backupMediaRecorderSetAudioSource;
+    // Phase 4b: clipboard / camera / audio / process / shell / navigation
+    public Method backupClipboardGetPrimaryClip;
+    public Method backupCameraOpen0;
+    public Method backupCameraOpenInt;
+    public Method backupAudioRecordStartRecording;
+    public Method backupGetRunningAppProcesses;
+    public Method backupRuntimeExecStr;
+    public Method backupRuntimeExecArray;
+    public Method backupProcessBuilderStart;
+    public Method backupStartActivity;
     // Phase 5
     public Method backupUrlOpenConnection;
     public Method backupOkHttpNewCall;
+    public Method backupRealCallExecute;
     // Phase 6: sensors
     public Method backupSensorRegister3;
     public Method backupSensorRegister4Int;
@@ -247,7 +258,141 @@ public class HookerBridge {
                 : null;
     }
 
-    // ---- Phase 6: sensors ----
+    // ---- Phase 4b: clipboard / camera / audio / process / shell / navigation ----
+
+    // ClipboardManager.getPrimaryClip()  instance: args={thiz}
+    public Object hookClipboardGetPrimaryClip(Object[] args) {
+        Object clip = backupClipboardGetPrimaryClip != null
+                ? safeInvokeObject(backupClipboardGetPrimaryClip, args[0])
+                : null;
+        String text = "";
+        if (clip != null) {
+            try {
+                int count = (Integer) clip.getClass().getMethod("getItemCount").invoke(clip);
+                if (count > 0) {
+                    Object item = clip.getClass().getMethod("getItemAt", int.class).invoke(clip, 0);
+                    Object cs = item.getClass().getMethod("getText").invoke(item);
+                    text = cs != null ? cs.toString() : "";
+                }
+            } catch (Exception ignored) {}
+        }
+        log("ClipboardManager.getPrimaryClip", text);
+        return clip;
+    }
+
+    // Camera.open()  static: args={}
+    public Object hookCameraOpen0(Object[] args) {
+        log("Camera.open", "default");
+        return backupCameraOpen0 != null
+                ? safeInvokeObject(backupCameraOpen0, null)
+                : null;
+    }
+
+    // Camera.open(int cameraId)  static: args={cameraId}
+    public Object hookCameraOpenInt(Object[] args) {
+        String id = args[0] != null ? args[0].toString() : "?";
+        log("Camera.open", id);
+        return backupCameraOpenInt != null
+                ? safeInvokeObject(backupCameraOpenInt, null, args[0])
+                : null;
+    }
+
+    // AudioRecord.startRecording()  instance: args={thiz}
+    public Object hookAudioRecordStartRecording(Object[] args) {
+        log("AudioRecord.startRecording", "");
+        if (backupAudioRecordStartRecording != null)
+            safeInvokeObject(backupAudioRecordStartRecording, args[0]);
+        return null;
+    }
+
+    // ActivityManager.getRunningAppProcesses()  instance: args={thiz}
+    public Object hookGetRunningAppProcesses(Object[] args) {
+        Object list = backupGetRunningAppProcesses != null
+                ? safeInvokeObject(backupGetRunningAppProcesses, args[0])
+                : null;
+        log("ActivityManager.getRunningAppProcesses", list != null ? "count=" + getListSize(list) : "null");
+        return list;
+    }
+
+    private static int getListSize(Object list) {
+        try { return (Integer) list.getClass().getMethod("size").invoke(list); }
+        catch (Exception e) { return -1; }
+    }
+
+    // Runtime.exec(String)  instance: args={thiz, cmd}
+    public Object hookRuntimeExecStr(Object[] args) {
+        String cmd = args[1] != null ? args[1].toString() : "";
+        log("Runtime.exec", cmd);
+        return backupRuntimeExecStr != null
+                ? safeInvokeObject(backupRuntimeExecStr, args[0], args[1])
+                : null;
+    }
+
+    // Runtime.exec(String[])  instance: args={thiz, cmdArray}
+    public Object hookRuntimeExecArray(Object[] args) {
+        String cmd = "";
+        if (args[1] instanceof Object[]) {
+            StringBuilder sb = new StringBuilder();
+            for (Object o : (Object[]) args[1]) {
+                if (sb.length() > 0) sb.append(' ');
+                sb.append(o != null ? o.toString() : "");
+            }
+            cmd = sb.toString();
+        }
+        log("Runtime.exec[]", cmd);
+        return backupRuntimeExecArray != null
+                ? safeInvokeObject(backupRuntimeExecArray, args[0], args[1])
+                : null;
+    }
+
+    // ProcessBuilder.start()  instance: args={thiz}
+    public Object hookProcessBuilderStart(Object[] args) {
+        String cmd = "";
+        try {
+            Object cmdList = args[0].getClass().getMethod("command").invoke(args[0]);
+            cmd = cmdList != null ? cmdList.toString() : "";
+        } catch (Exception ignored) {}
+        log("ProcessBuilder.start", cmd);
+        return backupProcessBuilderStart != null
+                ? safeInvokeObject(backupProcessBuilderStart, args[0])
+                : null;
+    }
+
+    // Activity.startActivity(Intent)  instance: args={thiz, intent}
+    public Object hookStartActivity(Object[] args) {
+        String action = "";
+        if (args[1] != null) {
+            try { action = (String) args[1].getClass().getMethod("getAction").invoke(args[1]); }
+            catch (Exception ignored) {}
+            if (action == null) action = args[1].toString();
+        }
+        log("Activity.startActivity", action != null ? action : "");
+        if (backupStartActivity != null)
+            safeInvokeObject(backupStartActivity, args[0], args[1]);
+        return null;
+    }
+
+    // ---- Phase 5b: OkHttp3 RealCall.execute (sync, captures response code) ----
+
+    // RealCall.execute()  instance: args={thiz}
+    public Object hookRealCallExecute(Object[] args) {
+        Object response = backupRealCallExecute != null
+                ? safeInvokeObject(backupRealCallExecute, args[0])
+                : null;
+        try {
+            Object request = args[0].getClass().getMethod("request").invoke(args[0]);
+            String url = request.getClass().getMethod("url").invoke(request).toString();
+            int code = response != null
+                    ? (Integer) response.getClass().getMethod("code").invoke(response)
+                    : -1;
+            log("OkHttp3.RealCall.execute", url + " code=" + code);
+        } catch (Exception e) {
+            log("OkHttp3.RealCall.execute", "?");
+        }
+        return response;
+    }
+
+
 
     private static String sensorTypeName(int type) {
         switch (type) {

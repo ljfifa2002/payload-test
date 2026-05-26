@@ -298,7 +298,57 @@ void install_device_id_hooks(JNIEnv* env) {
         "okhttp3/OkHttpClient", "newCall", "(Lokhttp3/Request;)Lokhttp3/Call;",
         "hookOkHttpNewCall", kCbSig, "backupOkHttpNewCall", false, true);
 
-    // Phase 6: sensors
+    // Phase 4b: clipboard / camera / audio / process / shell / navigation
+    hook_one(env, hooker_obj, hooker_class,
+        "android/content/ClipboardManager", "getPrimaryClip",
+        "()Landroid/content/ClipData;",
+        "hookClipboardGetPrimaryClip", kCbSig, "backupClipboardGetPrimaryClip", false);
+
+    hook_one(env, hooker_obj, hooker_class,
+        "android/hardware/Camera", "open",
+        "()Landroid/hardware/Camera;",
+        "hookCameraOpen0", kCbSig, "backupCameraOpen0", true);
+
+    hook_one(env, hooker_obj, hooker_class,
+        "android/hardware/Camera", "open",
+        "(I)Landroid/hardware/Camera;",
+        "hookCameraOpenInt", kCbSig, "backupCameraOpenInt", true);
+
+    hook_one(env, hooker_obj, hooker_class,
+        "android/media/AudioRecord", "startRecording", "()V",
+        "hookAudioRecordStartRecording", kCbSig, "backupAudioRecordStartRecording", false);
+
+    hook_one(env, hooker_obj, hooker_class,
+        "android/app/ActivityManager", "getRunningAppProcesses",
+        "()Ljava/util/List;",
+        "hookGetRunningAppProcesses", kCbSig, "backupGetRunningAppProcesses", false);
+
+    hook_one(env, hooker_obj, hooker_class,
+        "java/lang/Runtime", "exec",
+        "(Ljava/lang/String;)Ljava/lang/Process;",
+        "hookRuntimeExecStr", kCbSig, "backupRuntimeExecStr", false);
+
+    hook_one(env, hooker_obj, hooker_class,
+        "java/lang/Runtime", "exec",
+        "([Ljava/lang/String;)Ljava/lang/Process;",
+        "hookRuntimeExecArray", kCbSig, "backupRuntimeExecArray", false);
+
+    hook_one(env, hooker_obj, hooker_class,
+        "java/lang/ProcessBuilder", "start", "()Ljava/lang/Process;",
+        "hookProcessBuilderStart", kCbSig, "backupProcessBuilderStart", false);
+
+    hook_one(env, hooker_obj, hooker_class,
+        "android/app/Activity", "startActivity",
+        "(Landroid/content/Intent;)V",
+        "hookStartActivity", kCbSig, "backupStartActivity", false);
+
+    // Phase 5b: OkHttp3 RealCall.execute — optional, only if okhttp3 is bundled
+    hook_one(env, hooker_obj, hooker_class,
+        "okhttp3/RealCall", "execute",
+        "()Lokhttp3/Response;",
+        "hookRealCallExecute", kCbSig, "backupRealCallExecute", false, true);
+
+
     hook_one(env, hooker_obj, hooker_class,
         "android/hardware/SensorManager", "registerListener",
         "(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;I)Z",

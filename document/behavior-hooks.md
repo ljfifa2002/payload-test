@@ -41,6 +41,15 @@
 | 12 | `android.content.ContentResolver.query(Uri, String[], Bundle, CancellationSignal)` | `(Landroid/net/Uri;[Ljava/lang/String;Landroid/os/Bundle;Landroid/os/CancellationSignal;)Landroid/database/Cursor;` | 否 | 联系人 / 短信 / 通话记录 / 日历 / 媒体库 URI（仅记录含敏感关键词的 URI） | `ContentResolver.query` |
 | 13 | `android.hardware.camera2.CameraManager.openCamera(String, StateCallback, Handler)` | `(Ljava/lang/String;Landroid/hardware/camera2/CameraDevice$StateCallback;Landroid/os/Handler;)V` | 否 | 摄像头 ID | `CameraManager.openCamera` |
 | 14 | `android.media.MediaRecorder.setAudioSource(int)` | `(I)V` | 否 | 音频来源编号（1=MIC, 5=CAMCORDER 等） | `MediaRecorder.setAudioSource` |
+| 15 | `android.content.ClipboardManager.getPrimaryClip()` | `()Landroid/content/ClipData;` | 否 | 剪贴板第一条文本内容 | `ClipboardManager.getPrimaryClip` |
+| 16 | `android.hardware.Camera.open()` | `()Landroid/hardware/Camera;` | 是 | 旧版摄像头 API（默认摄像头） | `Camera.open` |
+| 17 | `android.hardware.Camera.open(int)` | `(I)Landroid/hardware/Camera;` | 是 | 旧版摄像头 API（指定 ID） | `Camera.open` |
+| 18 | `android.media.AudioRecord.startRecording()` | `()V` | 否 | 录音开始事件 | `AudioRecord.startRecording` |
+| 19 | `android.app.ActivityManager.getRunningAppProcesses()` | `()Ljava/util/List;` | 否 | 运行进程列表（返回数量） | `ActivityManager.getRunningAppProcesses` |
+| 20 | `java.lang.Runtime.exec(String)` | `(Ljava/lang/String;)Ljava/lang/Process;` | 否 | 执行的 shell 命令字符串 | `Runtime.exec` |
+| 21 | `java.lang.Runtime.exec(String[])` | `([Ljava/lang/String;)Ljava/lang/Process;` | 否 | 执行的 shell 命令数组（空格拼接） | `Runtime.exec[]` |
+| 22 | `java.lang.ProcessBuilder.start()` | `()Ljava/lang/Process;` | 否 | 执行的命令（command() 列表） | `ProcessBuilder.start` |
+| 23 | `android.app.Activity.startActivity(Intent)` | `(Landroid/content/Intent;)V` | 否 | Intent action 字符串 | `Activity.startActivity` |
 
 ---
 
@@ -48,10 +57,11 @@
 
 | # | Java API | JNI 签名 | 静态 | 捕获内容 | 日志 method 字段 |
 |---|----------|---------|------|---------|-----------------|
-| 15 | `java.net.URL.openConnection()` | `()Ljava/net/URLConnection;` | 否 | 请求 URL 字符串 | `URL.openConnection` |
-| 16 | `okhttp3.OkHttpClient.newCall(Request)` | `(Lokhttp3/Request;)Lokhttp3/Call;` | 否 | OkHttp 请求 URL（App 未打包 OkHttp3 时自动跳过） | `OkHttpClient.newCall` |
-| 17 | `libssl.so SSL_write(SSL*, const void*, int)` | native | — | SNI host + 明文长度 + 前128字节预览（文本/hex） | `SSL_write` |
-| 18 | `libssl.so SSL_read(SSL*, void*, int)` | native | — | SNI host + 明文长度 + 前128字节预览（文本/hex） | `SSL_read` |
+| 24 | `java.net.URL.openConnection()` | `()Ljava/net/URLConnection;` | 否 | 请求 URL 字符串 | `URL.openConnection` |
+| 25 | `okhttp3.OkHttpClient.newCall(Request)` | `(Lokhttp3/Request;)Lokhttp3/Call;` | 否 | OkHttp 请求 URL（App 未打包 OkHttp3 时自动跳过） | `OkHttpClient.newCall` |
+| 26 | `okhttp3.RealCall.execute()` | `()Lokhttp3/Response;` | 否 | OkHttp 同步请求 URL + 响应状态码（App 未打包 OkHttp3 时自动跳过） | `OkHttp3.RealCall.execute` |
+| 27 | `libssl.so SSL_write(SSL*, const void*, int)` | native | — | SNI host + 明文长度 + 前128字节预览（文本/hex） | `SSL_write` |
+| 28 | `libssl.so SSL_read(SSL*, void*, int)` | native | — | SNI host + 明文长度 + 前128字节预览（文本/hex） | `SSL_read` |
 
 ---
 
@@ -61,9 +71,9 @@
 
 | # | Java API | JNI 签名 | 静态 | 捕获内容 | 日志 method 字段 |
 |---|----------|---------|------|---------|-----------------|
-| 19 | `android.hardware.SensorManager.registerListener(SensorEventListener, Sensor, int)` | `(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;I)Z` | 否 | 传感器类型编号 + 类型名 + 硬件名称 + 采样率 | `SensorManager.registerListener` |
-| 20 | `android.hardware.SensorManager.registerListener(SensorEventListener, Sensor, int, int)` | `(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;II)Z` | 否 | 同上 + 最大延迟（maxLatency） | `SensorManager.registerListener` |
-| 21 | `android.hardware.SensorManager.registerListener(SensorEventListener, Sensor, int, Handler)` | `(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;ILandroid/os/Handler;)Z` | 否 | 同上 + Handler | `SensorManager.registerListener` |
+| 29 | `android.hardware.SensorManager.registerListener(SensorEventListener, Sensor, int)` | `(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;I)Z` | 否 | 传感器类型编号 + 类型名 + 硬件名称 + 采样率 | `SensorManager.registerListener` |
+| 30 | `android.hardware.SensorManager.registerListener(SensorEventListener, Sensor, int, int)` | `(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;II)Z` | 否 | 同上 + 最大延迟（maxLatency） | `SensorManager.registerListener` |
+| 31 | `android.hardware.SensorManager.registerListener(SensorEventListener, Sensor, int, Handler)` | `(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;ILandroid/os/Handler;)Z` | 否 | 同上 + Handler | `SensorManager.registerListener` |
 
 ---
 
@@ -71,9 +81,9 @@
 
 | # | Java API | JNI 签名 | 静态 | 捕获内容 | 日志 method 字段 |
 |---|----------|---------|------|---------|-----------------|
-| 22 | `android.app.Activity.requestPermissions(String[], int)` | `([Ljava/lang/String;I)V` | 否 | 申请的权限列表（逗号分隔） | `Activity.requestPermissions` |
-| 23 | `android.app.Activity.checkSelfPermission(String)` | `(Ljava/lang/String;)I` | 否 | 被查询的权限名（仅记录结果为 DENIED 的） | `Activity.checkSelfPermission` |
-| 24 | `androidx.core.app.ActivityCompat.requestPermissions(Activity, String[], int)` | `(Landroid/app/Activity;[Ljava/lang/String;I)V` | 是 | 申请的权限列表（App 未打包 androidx 时自动跳过） | `ActivityCompat.requestPermissions` |
+| 32 | `android.app.Activity.requestPermissions(String[], int)` | `([Ljava/lang/String;I)V` | 否 | 申请的权限列表（逗号分隔） | `Activity.requestPermissions` |
+| 33 | `android.app.Activity.checkSelfPermission(String)` | `(Ljava/lang/String;)I` | 否 | 被查询的权限名（仅记录结果为 DENIED 的） | `Activity.checkSelfPermission` |
+| 34 | `androidx.core.app.ActivityCompat.requestPermissions(Activity, String[], int)` | `(Landroid/app/Activity;[Ljava/lang/String;I)V` | 是 | 申请的权限列表（App 未打包 androidx 时自动跳过） | `ActivityCompat.requestPermissions` |
 
 ---
 
