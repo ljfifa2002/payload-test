@@ -4,6 +4,9 @@
 #include <functional>
 #include <string>
 #include <lsplant.hpp>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
 
 #define TAG "payload"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
@@ -39,39 +42,61 @@ static jclass find_app_class(JNIEnv* env, const char* jni_name) {
     return result;
 }
 
-// Load hooker.dex from /data/local/tmp, return HookerBridge class or nullptr.
+// Load hooker.dex from /data/local/tmp via InMemoryDexClassLoader (API 26+).
+// Reading the dex bytes natively and loading from a ByteBuffer avoids any
+// file path appearing in /proc/self/maps and bypasses SELinux restrictions
+// on DexClassLoader accessing /data/local/tmp from an app process context.
 static jclass load_hooker_class(JNIEnv* env) {
-    // Use DexClassLoader via JNI reflection
-    jclass cl_class = env->FindClass("dalvik/system/DexClassLoader");
-    if (check_exception(env, "FindClass DexClassLoader") || cl_class == nullptr) return nullptr;
+    // --- Read dex bytes natively ---
+    const char* dex_path = "/data/local/tmp/hooker.dex";
+    int fd = open(dex_path, O_RDONLY);
+    if (fd < 0) { LOGE("hooks: open hooker.dex failed errno=%d", errno); return nullptr; }
+    struct stat st;
+    fstat(fd, &st);
+    jsize dex_size = (jsize)st.st_size;
 
-    jmethodID cl_ctor = env->GetMethodID(cl_class, "<init>",
-        "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V");
-    if (check_exception(env, "GetMethodID DexClassLoader.<init>") || cl_ctor == nullptr) return nullptr;
+    // Allocate a direct ByteBuffer and read the dex into it
+    jclass bb_class = env->FindClass("java/nio/ByteBuffer");
+    if (check_exception(env, "FindClass ByteBuffer") || bb_class == nullptr) { close(fd); return nullptr; }
+    jmethodID allocate_direct = env->GetStaticMethodID(bb_class, "allocateDirect", "(I)Ljava/nio/ByteBuffer;");
+    if (check_exception(env, "GetStaticMethodID allocateDirect") || allocate_direct == nullptr) { close(fd); return nullptr; }
+    jobject byte_buf = env->CallStaticObjectMethod(bb_class, allocate_direct, dex_size);
+    if (check_exception(env, "allocateDirect") || byte_buf == nullptr) { close(fd); return nullptr; }
 
-    // Parent classloader: current thread's context classloader
+    // Get the native address of the direct buffer and read dex bytes into it
+    void* buf_ptr = env->GetDirectBufferAddress(byte_buf);
+    if (buf_ptr == nullptr) { LOGE("hooks: GetDirectBufferAddress failed"); close(fd); return nullptr; }
+    ssize_t n = read(fd, buf_ptr, (size_t)dex_size);
+    close(fd);
+    if (n != (ssize_t)dex_size) { LOGE("hooks: read hooker.dex failed n=%zd", n); return nullptr; }
+
+    // --- Get parent classloader ---
     jclass thread_class = env->FindClass("java/lang/Thread");
     jmethodID current_thread = env->GetStaticMethodID(thread_class, "currentThread", "()Ljava/lang/Thread;");
     jmethodID get_context_cl = env->GetMethodID(thread_class, "getContextClassLoader", "()Ljava/lang/ClassLoader;");
     jobject cur_thread = env->CallStaticObjectMethod(thread_class, current_thread);
     jobject parent_cl = env->CallObjectMethod(cur_thread, get_context_cl);
     if (check_exception(env, "getContextClassLoader")) parent_cl = nullptr;
-
-    // Save for find_app_class (OkHttp3 etc.)
     if (parent_cl && !g_app_cl) g_app_cl = env->NewGlobalRef(parent_cl);
 
-    jstring dex_path = env->NewStringUTF("/data/local/tmp/hooker.dex");
-    // optimizedDirectory is ignored on API 26+; use null
-    jobject dex_cl = env->NewObject(cl_class, cl_ctor,
-        dex_path, nullptr, nullptr, parent_cl);
-    if (check_exception(env, "new DexClassLoader") || dex_cl == nullptr) {
-        LOGE("hooks: DexClassLoader construction failed");
+    // --- InMemoryDexClassLoader(ByteBuffer dexBuffer, ClassLoader parent) ---
+    jclass imdcl_class = env->FindClass("dalvik/system/InMemoryDexClassLoader");
+    if (check_exception(env, "FindClass InMemoryDexClassLoader") || imdcl_class == nullptr) return nullptr;
+    jmethodID imdcl_ctor = env->GetMethodID(imdcl_class, "<init>",
+        "(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V");
+    if (check_exception(env, "GetMethodID InMemoryDexClassLoader.<init>") || imdcl_ctor == nullptr) return nullptr;
+
+    jobject dex_cl = env->NewObject(imdcl_class, imdcl_ctor, byte_buf, parent_cl);
+    if (check_exception(env, "new InMemoryDexClassLoader") || dex_cl == nullptr) {
+        LOGE("hooks: InMemoryDexClassLoader construction failed");
         return nullptr;
     }
 
-    // classLoader.loadClass("com.pecker.payload.HookerBridge")
-    jmethodID load_class = env->GetMethodID(cl_class, "loadClass",
+    // --- classLoader.loadClass("com.pecker.payload.HookerBridge") ---
+    jmethodID load_class = env->GetMethodID(
+        env->FindClass("java/lang/ClassLoader"), "loadClass",
         "(Ljava/lang/String;)Ljava/lang/Class;");
+    if (check_exception(env, "GetMethodID loadClass") || load_class == nullptr) return nullptr;
     jstring class_name = env->NewStringUTF("com.pecker.payload.HookerBridge");
     jclass hooker_class = static_cast<jclass>(
         env->CallObjectMethod(dex_cl, load_class, class_name));
