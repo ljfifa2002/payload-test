@@ -2,6 +2,7 @@
 #include <shadowhook.h>
 #include <android/log.h>
 #include <dlfcn.h>
+#include <pthread.h>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -11,23 +12,22 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
-// Opaque BoringSSL SSL type — only the pointer is needed.
 struct ssl_st;
 using SSL = ssl_st;
 
-using ssl_write_t       = int (*)(SSL*, const void*, int);
-using ssl_read_t        = int (*)(SSL*, void*, int);
+using ssl_write_t        = int (*)(SSL*, const void*, int);
+using ssl_read_t         = int (*)(SSL*, void*, int);
 using ssl_get_servname_t = const char* (*)(const SSL*, int);
 
-static ssl_write_t        orig_ssl_write    = nullptr;
-static ssl_read_t         orig_ssl_read     = nullptr;
-static ssl_get_servname_t fn_get_servname   = nullptr;
+static ssl_write_t        orig_ssl_write  = nullptr;
+static ssl_read_t         orig_ssl_read   = nullptr;
+static ssl_get_servname_t fn_get_servname = nullptr;
 
 static const int PREVIEW_MAX = 128;
 
 static std::string get_host(SSL* ssl) {
     if (fn_get_servname) {
-        const char* h = fn_get_servname(ssl, 0); // TLSEXT_NAMETYPE_host_name = 0
+        const char* h = fn_get_servname(ssl, 0);
         if (h && h[0]) return h;
     }
     return "?";
@@ -37,7 +37,6 @@ static void log_ssl(const char* dir, SSL* ssl, const void* buf, int len) {
     std::string host = get_host(ssl);
     const auto* p = static_cast<const unsigned char*>(buf);
 
-    // Detect printable ASCII (HTTP/1.1 text): check first 16 bytes.
     int check = len < 16 ? len : 16;
     bool is_text = true;
     for (int i = 0; i < check; i++) {
@@ -48,7 +47,6 @@ static void log_ssl(const char* dir, SSL* ssl, const void* buf, int len) {
     }
 
     int preview_len = len < PREVIEW_MAX ? len : PREVIEW_MAX;
-    // Worst case hex: each byte → 2 chars, plus null terminator and margin.
     char preview[PREVIEW_MAX * 2 + 4];
     int out = 0;
 
@@ -91,55 +89,58 @@ static int hook_ssl_read(SSL* ssl, void* buf, int num) {
     return ret;
 }
 
-void install_ssl_hooks() {
-    // Use RTLD_NOLOAD to check if libssl.so is already mapped into this process.
-    // At early app startup the network stack may not have loaded it yet; hooking
-    // a not-yet-loaded library via shadowhook_hook_sym_name blocks indefinitely.
-    // If absent, skip silently — the library will not be used before our process
-    // exits anyway (no network calls have happened yet at this point).
+// Background thread: shadowhook_hook_sym_name blocks until libssl.so is loaded,
+// so this runs off the main thread and installs hooks as soon as the library appears.
+static void* ssl_hook_thread(void*) {
+    LOGI("ssl_hooks: waiting for libssl.so to load...");
+
+    void* real_orig_w = nullptr;
+    void* stub_w = shadowhook_hook_sym_name(
+        "libssl.so", "SSL_write",
+        (void*)hook_ssl_write, &real_orig_w);
+    if (!stub_w) {
+        LOGE("ssl_hooks: SSL_write hook failed: %s",
+             shadowhook_to_errmsg(shadowhook_get_errno()));
+        return nullptr;
+    }
+    orig_ssl_write = reinterpret_cast<ssl_write_t>(real_orig_w);
+    LOGI("ssl_hooks: SSL_write hooked");
+
+    // libssl.so is now loaded — resolve hostname helper and hook SSL_read
     void* libssl = dlopen("libssl.so", RTLD_NOLOAD | RTLD_NOW);
-    if (!libssl) {
-        LOGI("ssl_hooks: libssl.so not loaded yet, skipping SSL hooks");
-        return;
+    if (libssl) {
+        fn_get_servname = reinterpret_cast<ssl_get_servname_t>(
+            shadowhook_dlsym_symtab(libssl, "SSL_get_servername"));
+        if (!fn_get_servname)
+            fn_get_servname = reinterpret_cast<ssl_get_servname_t>(
+                dlsym(libssl, "SSL_get_servername"));
+        if (fn_get_servname) LOGI("ssl_hooks: SSL_get_servername resolved");
+        else                 LOGI("ssl_hooks: SSL_get_servername not found, host='?'");
     }
 
-    // Resolve SSL_get_servername for SNI hostname extraction.
-    fn_get_servname = reinterpret_cast<ssl_get_servname_t>(
-        shadowhook_dlsym_symtab(libssl, "SSL_get_servername"));
-    if (!fn_get_servname)
-        fn_get_servname = reinterpret_cast<ssl_get_servname_t>(
-            dlsym(libssl, "SSL_get_servername"));
-    if (fn_get_servname) LOGI("ssl_hooks: SSL_get_servername resolved");
-    else                 LOGI("ssl_hooks: SSL_get_servername not found, host='?'");
+    void* real_orig_r = nullptr;
+    void* stub_r = shadowhook_hook_sym_name(
+        "libssl.so", "SSL_read",
+        (void*)hook_ssl_read, &real_orig_r);
+    if (stub_r) {
+        orig_ssl_read = reinterpret_cast<ssl_read_t>(real_orig_r);
+        LOGI("ssl_hooks: SSL_read hooked");
+    } else {
+        LOGE("ssl_hooks: SSL_read hook failed: %s",
+             shadowhook_to_errmsg(shadowhook_get_errno()));
+    }
 
-    // Hook by resolved address to avoid shadowhook_hook_sym_name's lazy-load wait.
-    orig_ssl_write = reinterpret_cast<ssl_write_t>(
-        shadowhook_dlsym_symtab(libssl, "SSL_write"));
-    if (!orig_ssl_write)
-        orig_ssl_write = reinterpret_cast<ssl_write_t>(dlsym(libssl, "SSL_write"));
+    return nullptr;
+}
 
-    orig_ssl_read = reinterpret_cast<ssl_read_t>(
-        shadowhook_dlsym_symtab(libssl, "SSL_read"));
-    if (!orig_ssl_read)
-        orig_ssl_read = reinterpret_cast<ssl_read_t>(dlsym(libssl, "SSL_read"));
-
-    if (orig_ssl_write) {
-        void* real_orig_w = nullptr;
-        void* stub_w = shadowhook_hook_func_addr(
-            (void*)orig_ssl_write, (void*)hook_ssl_write, &real_orig_w);
-        if (stub_w) { orig_ssl_write = reinterpret_cast<ssl_write_t>(real_orig_w);
-                      LOGI("ssl_hooks: SSL_write hooked"); }
-        else        LOGE("ssl_hooks: SSL_write hook failed: %s",
-                         shadowhook_to_errmsg(shadowhook_get_errno()));
-    } else LOGI("ssl_hooks: SSL_write symbol not found");
-
-    if (orig_ssl_read) {
-        void* real_orig_r = nullptr;
-        void* stub_r = shadowhook_hook_func_addr(
-            (void*)orig_ssl_read, (void*)hook_ssl_read, &real_orig_r);
-        if (stub_r) { orig_ssl_read = reinterpret_cast<ssl_read_t>(real_orig_r);
-                      LOGI("ssl_hooks: SSL_read hooked"); }
-        else        LOGE("ssl_hooks: SSL_read hook failed: %s",
-                         shadowhook_to_errmsg(shadowhook_get_errno()));
-    } else LOGI("ssl_hooks: SSL_read symbol not found");
+void install_ssl_hooks() {
+    // Start a detached background thread. shadowhook_hook_sym_name will block
+    // inside the thread until libssl.so is mapped, then install both hooks.
+    pthread_t tid;
+    if (pthread_create(&tid, nullptr, ssl_hook_thread, nullptr) == 0) {
+        pthread_detach(tid);
+        LOGI("ssl_hooks: deferred hook thread started");
+    } else {
+        LOGE("ssl_hooks: pthread_create failed");
+    }
 }
