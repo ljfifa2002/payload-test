@@ -321,17 +321,64 @@ public class HookerBridge {
 
     // ---- Phase 7: permission requests ----
 
+    private static String permissionCategory(String perm) {
+        if (perm == null) return "UNKNOWN";
+        // Camera
+        if (perm.equals("android.permission.CAMERA")) return "CAMERA";
+        // Microphone / Audio
+        if (perm.equals("android.permission.RECORD_AUDIO")) return "MICROPHONE";
+        // Location
+        if (perm.equals("android.permission.ACCESS_FINE_LOCATION"))   return "LOCATION_FINE";
+        if (perm.equals("android.permission.ACCESS_COARSE_LOCATION")) return "LOCATION_COARSE";
+        if (perm.equals("android.permission.ACCESS_BACKGROUND_LOCATION")) return "LOCATION_BACKGROUND";
+        // Contacts
+        if (perm.equals("android.permission.READ_CONTACTS"))   return "CONTACTS_READ";
+        if (perm.equals("android.permission.WRITE_CONTACTS"))  return "CONTACTS_WRITE";
+        // Telephony / SMS
+        if (perm.equals("android.permission.READ_PHONE_STATE"))  return "PHONE_STATE";
+        if (perm.equals("android.permission.CALL_PHONE"))         return "PHONE_CALL";
+        if (perm.equals("android.permission.READ_CALL_LOG"))      return "CALL_LOG_READ";
+        if (perm.equals("android.permission.WRITE_CALL_LOG"))     return "CALL_LOG_WRITE";
+        if (perm.equals("android.permission.SEND_SMS"))    return "SMS_SEND";
+        if (perm.equals("android.permission.RECEIVE_SMS")) return "SMS_RECEIVE";
+        if (perm.equals("android.permission.READ_SMS"))    return "SMS_READ";
+        // Storage / Media
+        if (perm.equals("android.permission.READ_EXTERNAL_STORAGE"))    return "STORAGE_READ";
+        if (perm.equals("android.permission.WRITE_EXTERNAL_STORAGE"))   return "STORAGE_WRITE";
+        if (perm.equals("android.permission.READ_MEDIA_IMAGES"))  return "MEDIA_IMAGES";
+        if (perm.equals("android.permission.READ_MEDIA_VIDEO"))   return "MEDIA_VIDEO";
+        if (perm.equals("android.permission.READ_MEDIA_AUDIO"))   return "MEDIA_AUDIO";
+        // Calendar
+        if (perm.equals("android.permission.READ_CALENDAR"))  return "CALENDAR_READ";
+        if (perm.equals("android.permission.WRITE_CALENDAR")) return "CALENDAR_WRITE";
+        // Body sensors
+        if (perm.equals("android.permission.BODY_SENSORS")) return "BODY_SENSORS";
+        // Activity recognition
+        if (perm.equals("android.permission.ACTIVITY_RECOGNITION")) return "ACTIVITY_RECOGNITION";
+        // Nearby / Bluetooth
+        if (perm.equals("android.permission.BLUETOOTH_SCAN"))    return "BLUETOOTH_SCAN";
+        if (perm.equals("android.permission.BLUETOOTH_CONNECT")) return "BLUETOOTH_CONNECT";
+        if (perm.equals("android.permission.NEARBY_WIFI_DEVICES")) return "NEARBY_WIFI";
+        // Notifications
+        if (perm.equals("android.permission.POST_NOTIFICATIONS")) return "NOTIFICATIONS";
+        // Fall back to the suffix after last dot
+        int dot = perm.lastIndexOf('.');
+        return dot >= 0 ? perm.substring(dot + 1) : perm;
+    }
+
+    private static void logPermission(String method, Object[] permArray) {
+        if (permArray == null) return;
+        for (Object p : permArray) {
+            String perm = p != null ? p.toString() : "";
+            String cat  = permissionCategory(perm);
+            log(method, cat + "(" + perm + ")");
+        }
+    }
+
     // Activity.requestPermissions(String[] perms, int requestCode)  instance: args={thiz, perms, code}
     public Object hookRequestPermissions(Object[] args) {
-        try {
-            Object[] perms = (Object[]) args[1];
-            StringBuilder sb = new StringBuilder();
-            for (int i = 0; i < perms.length; i++) {
-                if (i > 0) sb.append(',');
-                sb.append(perms[i]);
-            }
-            log("Activity.requestPermissions", sb.toString());
-        } catch (Exception e) { log("Activity.requestPermissions", "?"); }
+        try { logPermission("Activity.requestPermissions", (Object[]) args[1]); }
+        catch (Exception e) { log("Activity.requestPermissions", "?"); }
         if (backupRequestPermissions != null)
             safeInvokeObject(backupRequestPermissions, args[0], args[1], args[2]);
         return null;
@@ -345,23 +392,16 @@ public class HookerBridge {
             try { result = (Integer) backupCheckSelfPermission.invoke(args[0], perm); }
             catch (Exception e) { Log.e(TAG, "backup checkSelfPermission failed: " + e); }
         }
-        // Only log denials (result != 0) to reduce noise
         int r = result != null ? result : -1;
-        if (r != 0) log("Activity.checkSelfPermission", perm + "=DENIED");
+        if (r != 0) log("Activity.checkSelfPermission",
+                        permissionCategory(perm) + "(" + perm + ")=DENIED");
         return result != null ? result : -1;
     }
 
     // ActivityCompat.requestPermissions(Activity, String[], int)  static: args={activity, perms, code}
     public Object hookActivityCompatRequestPermissions(Object[] args) {
-        try {
-            Object[] perms = (Object[]) args[1];
-            StringBuilder sb = new StringBuilder();
-            for (int i = 0; i < perms.length; i++) {
-                if (i > 0) sb.append(',');
-                sb.append(perms[i]);
-            }
-            log("ActivityCompat.requestPermissions", sb.toString());
-        } catch (Exception e) { log("ActivityCompat.requestPermissions", "?"); }
+        try { logPermission("ActivityCompat.requestPermissions", (Object[]) args[1]); }
+        catch (Exception e) { log("ActivityCompat.requestPermissions", "?"); }
         if (backupActivityCompatRequestPermissions != null)
             safeInvokeObject(backupActivityCompatRequestPermissions, null, args[0], args[1], args[2]);
         return null;
