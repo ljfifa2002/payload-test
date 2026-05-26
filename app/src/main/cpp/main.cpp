@@ -80,11 +80,8 @@ static void payload_init() {
     }
     LOGI("lsplant::Init ok");
 
-    // DIAGNOSIS: disable all hooks to isolate whether white screen is caused
-    // by LSPlant ArtMethod modification detection or by library presence in maps.
-    // Re-enable after confirming App starts cleanly without hooks.
-    // install_device_id_hooks(env);
-    // install_art_inline_hooks(env, vm);
-    // install_ssl_hooks();
+    install_device_id_hooks(env);   // LSPlant path — works on non-Oplus
+    install_art_inline_hooks(env, vm); // ShadowHook inline path — bypasses Oplus watchdog
+    install_ssl_hooks();               // ShadowHook sym hook — SSL_read/SSL_write plaintext
     LOGI("payload init ok");
 }
