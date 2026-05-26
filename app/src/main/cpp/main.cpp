@@ -15,14 +15,15 @@
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
 static void* proxy_hook(void* target, void* hooker) {
-    void* orig = nullptr;
-    void* stub = shadowhook_hook_func_addr(target, hooker, &orig);
-    (void)stub;
-    if (orig == nullptr) {
-        LOGE("shadowhook_hook_func_addr failed: %s",
-             shadowhook_to_errmsg(shadowhook_get_errno()));
-    }
-    return orig;
+    // XLoader verifies libart.so code-byte integrity. shadowhook_hook_func_addr
+    // would patch libart.so function prologues, triggering the check.
+    // Instead, return target itself as the "original" — lsplant::Init sees a
+    // non-null return and considers its internal hooks "installed", but no code
+    // bytes in libart.so are modified. LSPlant will dispatch solely via
+    // ArtMethod entry_point_from_quick_compiled_code_ replacement, which XLoader
+    // does not check in this path.
+    (void)hooker;
+    return target;
 }
 
 static bool proxy_unhook(void* func) {
@@ -65,19 +66,23 @@ static void payload_init() {
         return;
     }
 
-    // DIAGNOSIS-3 (fixed): truly skip lsplant::Init — comment out the actual call.
-    // Tests if lsplant::Init's internal ART hooks (via proxy_hook/shadowhook) cause detection.
-    // proxy_hook and proxy_unhook are kept to avoid unused-function warnings.
-    (void)proxy_hook; (void)proxy_unhook;
-    // void* libart = shadowhook_dlopen("libart.so");
-    // lsplant::InitInfo info{ .inline_hooker = proxy_hook, .inline_unhooker = proxy_unhook,
-    //     .art_symbol_resolver = [libart](std::string_view sym) -> void* {
-    //         return shadowhook_dlsym_symtab(libart, std::string(sym).c_str()); }};
-    // bool lsp_ok = lsplant::Init(env, info);
-    // if (!lsp_ok) { LOGE("lsplant::Init failed"); return; }
-    // LOGI("lsplant::Init ok");
-    // install_device_id_hooks(env);
-    // install_art_inline_hooks(env, vm);
-    // install_ssl_hooks();
-    LOGI("payload init ok - diag3-fixed: shadowhook only, lsplant skipped");
+    void* libart = shadowhook_dlopen("libart.so");
+    lsplant::InitInfo info{
+        .inline_hooker = proxy_hook,
+        .inline_unhooker = proxy_unhook,
+        .art_symbol_resolver = [libart](std::string_view symbol) -> void* {
+            return shadowhook_dlsym_symtab(libart, std::string(symbol).c_str());
+        },
+    };
+    bool lsp_ok = lsplant::Init(env, info);
+    if (!lsp_ok) {
+        LOGE("lsplant::Init failed");
+        return;
+    }
+    LOGI("lsplant::Init ok");
+
+    install_device_id_hooks(env);
+    install_art_inline_hooks(env, vm);
+    install_ssl_hooks();
+    LOGI("payload init ok");
 }
