@@ -55,6 +55,9 @@
 | 21 | `java.lang.Runtime.exec(String[])` | `([Ljava/lang/String;)Ljava/lang/Process;` | 否 | 执行的 shell 命令数组（空格拼接） | `Runtime.exec[]` |
 | 22 | `java.lang.ProcessBuilder.start()` | `()Ljava/lang/Process;` | 否 | 执行的命令（command() 列表） | `ProcessBuilder.start` |
 | 23 | `android.app.Activity.startActivity(Intent)` | `(Landroid/content/Intent;)V` | 否 | Intent action 字符串 | `Activity.startActivity` |
+| 24 | `android.app.Activity.startActivityForResult(Intent, int)` | `(Landroid/content/Intent;I)V` | 否 | Intent action + requestCode | `Activity.startActivityForResult` |
+| 25 | `android.media.MediaRecorder.start()` | `()V` | 否 | 录制开始事件 | `MediaRecorder.start` |
+| 26 | `android.content.BroadcastReceiver.onReceive(Context, Intent)` | `(Landroid/content/Context;Landroid/content/Intent;)V` | 否 | Intent action（开机广播等）⚠️ 抽象方法，部分机型生效 | `BroadcastReceiver.onReceive` |
 
 ---
 
@@ -91,6 +94,18 @@
 | 34 | `android.app.Activity.requestPermissions(String[], int)` | `([Ljava/lang/String;I)V` | 否 | 申请的权限列表（逗号分隔） | `Activity.requestPermissions` |
 | 35 | `android.app.Activity.checkSelfPermission(String)` | `(Ljava/lang/String;)I` | 否 | 被查询的权限名（仅记录结果为 DENIED 的） | `Activity.checkSelfPermission` |
 | 36 | `androidx.core.app.ActivityCompat.requestPermissions(Activity, String[], int)` | `(Landroid/app/Activity;[Ljava/lang/String;I)V` | 是 | 申请的权限列表（App 未打包 androidx 时自动跳过） | `ActivityCompat.requestPermissions` |
+
+---
+
+## 分类七：SSL Pinning 绕过
+
+日志 type 为 `behavior`，method 统一为 `SSLPinning.bypass`，data 说明具体绕过点。
+
+| # | Java API | JNI 签名 | 静态 | 捕获内容 | 日志 method 字段 |
+|---|----------|---------|------|---------|-----------------|
+| 37 | `okhttp3.CertificatePinner.check(String, List)` | `(Ljava/lang/String;Ljava/util/List;)V` | 否 | 被绕过的域名（App 未打包 OkHttp3 时跳过） | `SSLPinning.bypass` |
+| 38 | `javax.net.ssl.SSLContext.init(KeyManager[], TrustManager[], SecureRandom)` | `([Ljavax/net/ssl/KeyManager;[Ljavax/net/ssl/TrustManager;Ljava/security/SecureRandom;)V` | 否 | TrustManager 替换为 trust-all | `SSLPinning.bypass` |
+| 39 | `javax.net.ssl.HttpsURLConnection.setDefaultHostnameVerifier(HostnameVerifier)` | `(Ljavax/net/ssl/HostnameVerifier;)V` | 是 | HostnameVerifier 替换为 always-true | `SSLPinning.bypass` |
 
 ---
 

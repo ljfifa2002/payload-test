@@ -37,6 +37,9 @@ public class HookerBridge {
     public Method backupRuntimeExecArray;
     public Method backupProcessBuilderStart;
     public Method backupStartActivity;
+    public Method backupStartActivityForResult;
+    public Method backupMediaRecorderStart;
+    public Method backupBroadcastReceiverOnReceive;
     // Phase 5
     public Method backupUrlOpenConnection;
     public Method backupOkHttpNewCall;
@@ -44,6 +47,10 @@ public class HookerBridge {
     public Method backupRealCallEnqueue;
     public Method backupVolleyDeliverResponse;
     // Phase 6: sensors
+    // Phase 6b: SSL Pinning bypass
+    public Method backupCertificatePinnerCheck;
+    public Method backupSslContextInit;
+    public Method backupSetDefaultHostnameVerifier;
     public Method backupSensorRegister3;
     public Method backupSensorRegister4Int;
     public Method backupSensorRegister4Handler;
@@ -462,6 +469,43 @@ public class HookerBridge {
         return null;
     }
 
+    // Activity.startActivityForResult(Intent, int)  instance: args={thiz, intent, requestCode}
+    public Object hookStartActivityForResult(Object[] args) {
+        String action = "";
+        if (args[1] != null) {
+            try { action = (String) args[1].getClass().getMethod("getAction").invoke(args[1]); }
+            catch (Exception ignored) {}
+            if (action == null) action = args[1].toString();
+        }
+        int code = args[2] != null ? ((Number) args[2]).intValue() : -1;
+        log("Activity.startActivityForResult", (action != null ? action : "") + " requestCode=" + code);
+        if (backupStartActivityForResult != null)
+            safeInvokeObject(backupStartActivityForResult, args[0], args[1], args[2]);
+        return null;
+    }
+
+    // MediaRecorder.start()  instance: args={thiz}
+    public Object hookMediaRecorderStart(Object[] args) {
+        log("MediaRecorder.start", "");
+        if (backupMediaRecorderStart != null)
+            safeInvokeObject(backupMediaRecorderStart, args[0]);
+        return null;
+    }
+
+    // BroadcastReceiver.onReceive(Context, Intent)  instance: args={thiz, context, intent}
+    // Note: hooks abstract base — fires only if ART does not bypass via vtable of subclass.
+    public Object hookBroadcastReceiverOnReceive(Object[] args) {
+        String action = "";
+        if (args[2] != null) {
+            try { action = (String) args[2].getClass().getMethod("getAction").invoke(args[2]); }
+            catch (Exception ignored) {}
+        }
+        log("BroadcastReceiver.onReceive", action != null ? action : "");
+        if (backupBroadcastReceiverOnReceive != null)
+            safeInvokeObject(backupBroadcastReceiverOnReceive, args[0], args[1], args[2]);
+        return null;
+    }
+
     // ---- Phase 5b: OkHttp3 RealCall.execute (sync, captures response code) ----
 
     // RealCall.execute()  instance: args={thiz}
@@ -560,7 +604,92 @@ public class HookerBridge {
         return null;
     }
 
-    private static String sensorTypeName(int type) {
+    // ---- Phase 6b: SSL Pinning bypass ----
+
+    // OkHttp3 CertificatePinner.check(String hostname, List<Certificate>)
+    // Just return without throwing — bypasses certificate pinning.
+    // args={thiz, hostname, peerCertificates}
+    public Object hookCertificatePinnerCheck(Object[] args) {
+        String host = args[1] != null ? args[1].toString() : "?";
+        log("SSLPinning.bypass", "CertificatePinner.check host=" + host);
+        // Do NOT call backup — returning null bypasses the pin check entirely.
+        return null;
+    }
+
+    // javax.net.ssl.SSLContext.init(KeyManager[], TrustManager[], SecureRandom)
+    // Replace TrustManagers with a trust-all proxy so all certs are accepted.
+    // args={thiz, keyManagers, trustManagers, secureRandom}
+    public Object hookSslContextInit(Object[] args) {
+        log("SSLPinning.bypass", "SSLContext.init replaced TrustManager");
+        Object trustAll = buildTrustAllManager();
+        Object tmArray = trustAll != null
+                ? java.lang.reflect.Array.newInstance(trustAll.getClass().getInterfaces()[0], 1)
+                : args[2];
+        if (trustAll != null) {
+            try { java.lang.reflect.Array.set(tmArray, 0, trustAll); }
+            catch (Exception ignored) { tmArray = args[2]; }
+        }
+        if (backupSslContextInit != null)
+            safeInvokeObject(backupSslContextInit, args[0], args[1], tmArray, args[3]);
+        return null;
+    }
+
+    // javax.net.ssl.HttpsURLConnection.setDefaultHostnameVerifier(HostnameVerifier)  static
+    // Replace with an always-true verifier so hostname mismatches are ignored.
+    // args={verifier}
+    public Object hookSetDefaultHostnameVerifier(Object[] args) {
+        log("SSLPinning.bypass", "setDefaultHostnameVerifier replaced");
+        Object trustAll = buildTrustAllVerifier(args[0]);
+        if (backupSetDefaultHostnameVerifier != null)
+            safeInvokeObject(backupSetDefaultHostnameVerifier, null,
+                    trustAll != null ? trustAll : args[0]);
+        return null;
+    }
+
+    private static Object buildTrustAllManager() {
+        try {
+            Class<?> x509Cls = Class.forName("javax.net.ssl.X509TrustManager");
+            return java.lang.reflect.Proxy.newProxyInstance(
+                x509Cls.getClassLoader(),
+                new Class<?>[]{ x509Cls },
+                (proxy, method, methodArgs) -> {
+                    switch (method.getName()) {
+                        case "checkClientTrusted":
+                        case "checkServerTrusted":
+                            return null;          // accept all
+                        case "getAcceptedIssuers":
+                            return java.lang.reflect.Array.newInstance(
+                                Class.forName("java.security.cert.X509Certificate"), 0);
+                        default:
+                            return method.getDefaultValue();
+                    }
+                });
+        } catch (Exception e) {
+            Log.e(TAG, "buildTrustAllManager failed: " + e);
+            return null;
+        }
+    }
+
+    private static Object buildTrustAllVerifier(Object original) {
+        try {
+            Class<?> hvCls = Class.forName("javax.net.ssl.HostnameVerifier");
+            ClassLoader cl = original != null
+                    ? original.getClass().getClassLoader()
+                    : hvCls.getClassLoader();
+            return java.lang.reflect.Proxy.newProxyInstance(
+                cl,
+                new Class<?>[]{ hvCls },
+                (proxy, method, methodArgs) -> {
+                    if ("verify".equals(method.getName())) return Boolean.TRUE;
+                    return method.getDefaultValue();
+                });
+        } catch (Exception e) {
+            Log.e(TAG, "buildTrustAllVerifier failed: " + e);
+            return null;
+        }
+    }
+
+
         switch (type) {
             case 1:  return "ACCELEROMETER";
             case 2:  return "MAGNETIC_FIELD";

@@ -363,6 +363,20 @@ void install_device_id_hooks(JNIEnv* env) {
         "(Landroid/content/Intent;)V",
         "hookStartActivity", kCbSig, "backupStartActivity", false);
 
+    hook_one(env, hooker_obj, hooker_class,
+        "android/app/Activity", "startActivityForResult",
+        "(Landroid/content/Intent;I)V",
+        "hookStartActivityForResult", kCbSig, "backupStartActivityForResult", false);
+
+    hook_one(env, hooker_obj, hooker_class,
+        "android/media/MediaRecorder", "start", "()V",
+        "hookMediaRecorderStart", kCbSig, "backupMediaRecorderStart", false);
+
+    hook_one(env, hooker_obj, hooker_class,
+        "android/content/BroadcastReceiver", "onReceive",
+        "(Landroid/content/Context;Landroid/content/Intent;)V",
+        "hookBroadcastReceiverOnReceive", kCbSig, "backupBroadcastReceiverOnReceive", false);
+
     // Phase 5b: OkHttp3 RealCall.execute — optional, only if okhttp3 is bundled
     hook_one(env, hooker_obj, hooker_class,
         "okhttp3/RealCall", "execute",
@@ -380,8 +394,24 @@ void install_device_id_hooks(JNIEnv* env) {
         "(Ljava/lang/String;)V",
         "hookVolleyDeliverResponse", kCbSig, "backupVolleyDeliverResponse", false, true);
 
+    // Phase 6b: SSL Pinning bypass
+    // CertificatePinner.check — optional, only if okhttp3 is bundled
     hook_one(env, hooker_obj, hooker_class,
-        "android/hardware/SensorManager", "registerListener",
+        "okhttp3/CertificatePinner", "check",
+        "(Ljava/lang/String;Ljava/util/List;)V",
+        "hookCertificatePinnerCheck", kCbSig, "backupCertificatePinnerCheck", false, true);
+
+    hook_one(env, hooker_obj, hooker_class,
+        "javax/net/ssl/SSLContext", "init",
+        "([Ljavax/net/ssl/KeyManager;[Ljavax/net/ssl/TrustManager;Ljava/security/SecureRandom;)V",
+        "hookSslContextInit", kCbSig, "backupSslContextInit", false);
+
+    hook_one(env, hooker_obj, hooker_class,
+        "javax/net/ssl/HttpsURLConnection", "setDefaultHostnameVerifier",
+        "(Ljavax/net/ssl/HostnameVerifier;)V",
+        "hookSetDefaultHostnameVerifier", kCbSig, "backupSetDefaultHostnameVerifier", true);
+
+
         "(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;I)Z",
         "hookSensorRegister3", kCbSig, "backupSensorRegister3", false);
 
