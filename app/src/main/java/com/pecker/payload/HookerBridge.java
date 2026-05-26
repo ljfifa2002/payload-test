@@ -19,10 +19,6 @@ public class HookerBridge {
     public Method backupLocationGetLatitude;
     public Method backupLocationGetLongitude;
     public Method backupRequestLocationUpdatesStr;
-    public Method backupRequestLocationUpdatesStrLooper;
-    public Method backupRequestLocationUpdatesCriteria;
-    public Method backupRequestLocationUpdatesCriteriaLooper;
-    public Method backupLocationGetLongitude;
     // Phase 4
     public Method backupContentResolverQuery;
     public Method backupCameraManagerOpenCamera;
