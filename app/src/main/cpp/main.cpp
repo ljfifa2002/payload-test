@@ -65,34 +65,19 @@ static void payload_init() {
         return;
     }
 
-    void* libart = shadowhook_dlopen("libart.so");
-    lsplant::InitInfo info{
-        .inline_hooker = proxy_hook,
-        .inline_unhooker = proxy_unhook,
-        .art_symbol_resolver = [libart](std::string_view symbol) -> void* {
-            return shadowhook_dlsym_symtab(libart, std::string(symbol).c_str());
-        },
-    };
-    bool lsp_ok = lsplant::Init(env, info);
-    if (!lsp_ok) {
-        LOGE("lsplant::Init failed");
-        return;
-    }
-    LOGI("lsplant::Init ok");
-
-    // DIAGNOSIS-3: skip lsplant::Init entirely. Tests if lsplant's internal
-    // ART hooks (applied during Init via proxy_hook) are the detection trigger.
-    // If App starts normally: lsplant::Init modifying libart.so is the issue.
-    // If App still white-screens: shadowhook_init or anonymous exec segments.
-    //
+    // DIAGNOSIS-3 (fixed): truly skip lsplant::Init — comment out the actual call.
+    // Tests if lsplant::Init's internal ART hooks (via proxy_hook/shadowhook) cause detection.
+    // proxy_hook and proxy_unhook are kept to avoid unused-function warnings.
+    (void)proxy_hook; (void)proxy_unhook;
     // void* libart = shadowhook_dlopen("libart.so");
-    // lsplant::InitInfo info{ ... };
+    // lsplant::InitInfo info{ .inline_hooker = proxy_hook, .inline_unhooker = proxy_unhook,
+    //     .art_symbol_resolver = [libart](std::string_view sym) -> void* {
+    //         return shadowhook_dlsym_symtab(libart, std::string(sym).c_str()); }};
     // bool lsp_ok = lsplant::Init(env, info);
-    // if (!lsp_ok) { ... }
+    // if (!lsp_ok) { LOGE("lsplant::Init failed"); return; }
     // LOGI("lsplant::Init ok");
-
     // install_device_id_hooks(env);
     // install_art_inline_hooks(env, vm);
     // install_ssl_hooks();
-    LOGI("payload init ok - diag3: shadowhook only, no lsplant");
+    LOGI("payload init ok - diag3-fixed: shadowhook only, lsplant skipped");
 }
