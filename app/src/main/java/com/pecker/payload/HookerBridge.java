@@ -68,8 +68,35 @@ public class HookerBridge {
         catch (Exception e) { Log.e(TAG, "backup invoke object failed: " + e); return null; }
     }
 
+    private static String captureStack() {
+        StackTraceElement[] frames = Thread.currentThread().getStackTrace();
+        StringBuilder sb = new StringBuilder();
+        int kept = 0;
+        for (StackTraceElement f : frames) {
+            String cls = f.getClassName();
+            // Skip VM internals, reflection, and our own bridge frames
+            if (cls.startsWith("com.pecker.payload.")
+                    || cls.startsWith("java.lang.Thread")
+                    || cls.startsWith("java.lang.reflect.")
+                    || cls.startsWith("sun.reflect.")
+                    || cls.startsWith("dalvik.system.")
+                    || cls.equals("de.robv.android.xposed.XposedBridge")) {
+                continue;
+            }
+            if (kept > 0) sb.append('|');
+            sb.append(cls).append('.').append(f.getMethodName())
+              .append(':').append(f.getLineNumber());
+            if (++kept == 12) break;
+        }
+        return sb.toString();
+    }
+
     private static void log(String method, String data) {
-        Log.i(TAG, "{\"type\":\"behavior\",\"method\":\"" + method + "\",\"data\":\"" + data + "\",\"timestamp\":" + System.currentTimeMillis() + "}");
+        String stack = captureStack();
+        Log.i(TAG, "{\"type\":\"behavior\",\"method\":\"" + method
+                + "\",\"data\":\"" + data
+                + "\",\"stack\":\"" + stack
+                + "\",\"timestamp\":" + System.currentTimeMillis() + "}");
     }
 
     // ---- Instance hook callbacks ([Ljava/lang/Object;)Ljava/lang/Object; ----

@@ -5,7 +5,8 @@
 **维护规则**
 - 新增 hook：在 `HookerBridge.java` 添加备份字段 + 回调方法，在 `hooks.cpp` 添加 `hook_one` 调用，并在本文档对应分类下补充一行。
 - 修改/删除 hook：同步更新代码和本文档。
-- 日志格式统一为：`{"type":"behavior","method":"<method>","data":"<data>","timestamp":<ms>}`，tag = `payload`。
+- 日志格式统一为：`{"type":"behavior","method":"<method>","data":"<data>","stack":"<frame1>|<frame2>|...","timestamp":<ms>}`，tag = `payload`。
+- `stack` 字段：跳过 `com.pecker.payload.*`、`java.lang.Thread`、`java.lang.reflect.*` 等框架帧，保留最多 12 个应用侧帧，格式为 `类名.方法名:行号|...`。
 
 ---
 
