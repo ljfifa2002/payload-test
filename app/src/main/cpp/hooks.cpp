@@ -411,7 +411,9 @@ void install_device_id_hooks(JNIEnv* env) {
         "(Ljavax/net/ssl/HostnameVerifier;)V",
         "hookSetDefaultHostnameVerifier", kCbSig, "backupSetDefaultHostnameVerifier", true);
 
-
+    // Phase 6: sensors
+    hook_one(env, hooker_obj, hooker_class,
+        "android/hardware/SensorManager", "registerListener",
         "(Landroid/hardware/SensorEventListener;Landroid/hardware/Sensor;I)Z",
         "hookSensorRegister3", kCbSig, "backupSensorRegister3", false);
 
