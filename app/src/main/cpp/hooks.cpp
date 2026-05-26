@@ -273,7 +273,28 @@ void install_device_id_hooks(JNIEnv* env) {
         "android/location/Location", "getLongitude", "()D",
         "hookLocationGetLongitude", kCbSig, "backupLocationGetLongitude", false);
 
-    // Phase 4: sensitive data
+    // Phase 3: requestLocationUpdates — 4 overloads
+    hook_one(env, hooker_obj, hooker_class,
+        "android/location/LocationManager", "requestLocationUpdates",
+        "(Ljava/lang/String;JFLandroid/location/LocationListener;)V",
+        "hookRequestLocationUpdatesStr", kCbSig, "backupRequestLocationUpdatesStr", false);
+
+    hook_one(env, hooker_obj, hooker_class,
+        "android/location/LocationManager", "requestLocationUpdates",
+        "(Ljava/lang/String;JFLandroid/location/LocationListener;Landroid/os/Looper;)V",
+        "hookRequestLocationUpdatesStrLooper", kCbSig, "backupRequestLocationUpdatesStrLooper", false);
+
+    hook_one(env, hooker_obj, hooker_class,
+        "android/location/LocationManager", "requestLocationUpdates",
+        "(Landroid/location/Criteria;JFLandroid/location/LocationListener;)V",
+        "hookRequestLocationUpdatesCriteria", kCbSig, "backupRequestLocationUpdatesCriteria", false);
+
+    hook_one(env, hooker_obj, hooker_class,
+        "android/location/LocationManager", "requestLocationUpdates",
+        "(Landroid/location/Criteria;JFLandroid/location/LocationListener;Landroid/os/Looper;)V",
+        "hookRequestLocationUpdatesCriteriaLooper", kCbSig, "backupRequestLocationUpdatesCriteriaLooper", false);
+
+
     hook_one(env, hooker_obj, hooker_class,
         "android/content/ContentResolver", "query",
         "(Landroid/net/Uri;[Ljava/lang/String;Landroid/os/Bundle;Landroid/os/CancellationSignal;)Landroid/database/Cursor;",

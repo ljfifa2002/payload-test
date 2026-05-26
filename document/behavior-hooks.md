@@ -29,9 +29,13 @@
 
 | # | Java API | JNI 签名 | 静态 | 捕获内容 | 日志 method 字段 |
 |---|----------|---------|------|---------|-----------------|
-| 9 | `android.location.LocationManager.getLastKnownLocation(String)` | `(Ljava/lang/String;)Landroid/location/Location;` | 否 | 经纬度 + provider（provider 嵌入 method 字段） | `LocationManager.getLastKnownLocation[<provider>]` |
+| 9 | `android.location.LocationManager.getLastKnownLocation(String)` | `(Ljava/lang/String;)Landroid/location/Location;` | 否 | 经纬度 + provider | `LocationManager.getLastKnownLocation[<provider>]` |
 | 10 | `android.location.Location.getLatitude()` | `()D` | 否 | 纬度（double） | `Location.getLatitude` |
 | 11 | `android.location.Location.getLongitude()` | `()D` | 否 | 经度（double） | `Location.getLongitude` |
+| 12 | `android.location.LocationManager.requestLocationUpdates(String, long, float, LocationListener)` | `(Ljava/lang/String;JFLandroid/location/LocationListener;)V` | 否 | provider + minTime(ms) + minDist(m) | `LocationManager.requestLocationUpdates` |
+| 13 | `android.location.LocationManager.requestLocationUpdates(String, long, float, LocationListener, Looper)` | `(Ljava/lang/String;JFLandroid/location/LocationListener;Landroid/os/Looper;)V` | 否 | provider + minTime + minDist | `LocationManager.requestLocationUpdates` |
+| 14 | `android.location.LocationManager.requestLocationUpdates(Criteria, long, float, LocationListener)` | `(Landroid/location/Criteria;JFLandroid/location/LocationListener;)V` | 否 | Criteria(FINE/COARSE) + minTime + minDist | `LocationManager.requestLocationUpdates` |
+| 15 | `android.location.LocationManager.requestLocationUpdates(Criteria, long, float, LocationListener, Looper)` | `(Landroid/location/Criteria;JFLandroid/location/LocationListener;Landroid/os/Looper;)V` | 否 | Criteria(FINE/COARSE) + minTime + minDist | `LocationManager.requestLocationUpdates` |
 
 ---
 

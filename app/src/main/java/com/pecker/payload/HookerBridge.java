@@ -18,6 +18,11 @@ public class HookerBridge {
     public Method backupGetLastKnownLocation;
     public Method backupLocationGetLatitude;
     public Method backupLocationGetLongitude;
+    public Method backupRequestLocationUpdatesStr;
+    public Method backupRequestLocationUpdatesStrLooper;
+    public Method backupRequestLocationUpdatesCriteria;
+    public Method backupRequestLocationUpdatesCriteriaLooper;
+    public Method backupLocationGetLongitude;
     // Phase 4
     public Method backupContentResolverQuery;
     public Method backupCameraManagerOpenCamera;
@@ -226,7 +231,63 @@ public class HookerBridge {
         return v != null ? v : 0.0;
     }
 
-    // ---- Phase 4: sensitive data ----
+    // ---- Phase 3: requestLocationUpdates (4 overloads) ----
+
+    private static String fmtLocationUpdate(String providerOrCriteria, Object[] args, int listenerIdx) {
+        long minTime = args[listenerIdx - 2] != null ? ((Number) args[listenerIdx - 2]).longValue() : -1;
+        float minDist = args[listenerIdx - 1] != null ? ((Number) args[listenerIdx - 1]).floatValue() : -1;
+        return providerOrCriteria + " minTime=" + minTime + "ms minDist=" + minDist + "m";
+    }
+
+    // requestLocationUpdates(String, long, float, LocationListener)  instance
+    // args={thiz, provider, minTime, minDistance, listener}
+    public Object hookRequestLocationUpdatesStr(Object[] args) {
+        String provider = args[1] != null ? args[1].toString() : "?";
+        log("LocationManager.requestLocationUpdates", fmtLocationUpdate(provider, args, 4));
+        if (backupRequestLocationUpdatesStr != null)
+            safeInvokeObject(backupRequestLocationUpdatesStr, args[0], args[1], args[2], args[3], args[4]);
+        return null;
+    }
+
+    // requestLocationUpdates(String, long, float, LocationListener, Looper)  instance
+    // args={thiz, provider, minTime, minDistance, listener, looper}
+    public Object hookRequestLocationUpdatesStrLooper(Object[] args) {
+        String provider = args[1] != null ? args[1].toString() : "?";
+        log("LocationManager.requestLocationUpdates", fmtLocationUpdate(provider, args, 4));
+        if (backupRequestLocationUpdatesStrLooper != null)
+            safeInvokeObject(backupRequestLocationUpdatesStrLooper, args[0], args[1], args[2], args[3], args[4], args[5]);
+        return null;
+    }
+
+    // requestLocationUpdates(Criteria, long, float, LocationListener)  instance
+    // args={thiz, criteria, minTime, minDistance, listener}
+    public Object hookRequestLocationUpdatesCriteria(Object[] args) {
+        String criteria = args[1] != null ? criteriaDesc(args[1]) : "?";
+        log("LocationManager.requestLocationUpdates", fmtLocationUpdate(criteria, args, 4));
+        if (backupRequestLocationUpdatesCriteria != null)
+            safeInvokeObject(backupRequestLocationUpdatesCriteria, args[0], args[1], args[2], args[3], args[4]);
+        return null;
+    }
+
+    // requestLocationUpdates(Criteria, long, float, LocationListener, Looper)  instance
+    // args={thiz, criteria, minTime, minDistance, listener, looper}
+    public Object hookRequestLocationUpdatesCriteriaLooper(Object[] args) {
+        String criteria = args[1] != null ? criteriaDesc(args[1]) : "?";
+        log("LocationManager.requestLocationUpdates", fmtLocationUpdate(criteria, args, 4));
+        if (backupRequestLocationUpdatesCriteriaLooper != null)
+            safeInvokeObject(backupRequestLocationUpdatesCriteriaLooper, args[0], args[1], args[2], args[3], args[4], args[5]);
+        return null;
+    }
+
+    private static String criteriaDesc(Object criteria) {
+        try {
+            int accuracy = (Integer) criteria.getClass().getMethod("getAccuracy").invoke(criteria);
+            // Criteria.ACCURACY_FINE=1, ACCURACY_COARSE=2
+            return "Criteria(accuracy=" + (accuracy == 1 ? "FINE" : accuracy == 2 ? "COARSE" : accuracy) + ")";
+        } catch (Exception e) { return "Criteria"; }
+    }
+
+
 
     // ContentResolver.query(Uri, String[], Bundle, CancellationSignal)  instance
     // args={thiz, uri, projection, queryArgs, cancellationSignal}
