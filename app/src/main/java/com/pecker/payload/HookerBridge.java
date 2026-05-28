@@ -215,6 +215,16 @@ public class HookerBridge {
         SocketChannel.send(json);
     }
 
+    private static void logNetwork(String httpMethod, String url, int statusCode) {
+        String json = "{\"type\":\"network\""
+                + ",\"method\":\"" + jsonEscape(httpMethod) + "\""
+                + ",\"url\":\"" + jsonEscape(url) + "\""
+                + ",\"statusCode\":" + statusCode
+                + ",\"timestamp\":" + System.currentTimeMillis() + "}";
+        Log.i(TAG, json);
+        SocketChannel.send(json);
+    }
+
     // ---- Instance hook callbacks ([Ljava/lang/Object;)Ljava/lang/Object; ----
 
     // TelephonyManager.getDeviceId()  instance: args={thiz}
@@ -635,12 +645,13 @@ public class HookerBridge {
         try {
             Object request = args[0].getClass().getMethod("request").invoke(args[0]);
             String url = request.getClass().getMethod("url").invoke(request).toString();
+            String httpMethod = (String) request.getClass().getMethod("method").invoke(request);
             int code = response != null
                     ? (Integer) response.getClass().getMethod("code").invoke(response)
                     : -1;
-            log("OkHttp3.RealCall.execute", url + " code=" + code);
+            logNetwork(httpMethod != null ? httpMethod : "?", url, code);
         } catch (Exception e) {
-            log("OkHttp3.RealCall.execute", "?");
+            logNetwork("?", "?", -1);
         }
         return response;
     }
@@ -652,20 +663,23 @@ public class HookerBridge {
         Object realCall = args[0];
         Object origCallback = args[1];
         String url;
+        String httpMethod;
         try {
             Object request = realCall.getClass().getMethod("request").invoke(realCall);
             url = request.getClass().getMethod("url").invoke(request).toString();
+            httpMethod = (String) request.getClass().getMethod("method").invoke(request);
+            if (httpMethod == null) httpMethod = "?";
         } catch (Exception e) {
             url = "?";
+            httpMethod = "?";
         }
         final String capturedUrl = url;
+        final String capturedMethod = httpMethod;
 
         // Build a proxy that implements okhttp3.Callback
         Object wrappedCallback = origCallback;
         if (origCallback != null) {
             try {
-                Class<?>[] ifaces = { origCallback.getClass().getInterfaces()[0] };
-                // Walk up to find okhttp3.Callback interface
                 Class<?> cls = origCallback.getClass();
                 Class<?> callbackIface = null;
                 outer:
@@ -689,18 +703,18 @@ public class HookerBridge {
                                 try {
                                     int code = (Integer) methodArgs[1].getClass()
                                             .getMethod("code").invoke(methodArgs[1]);
-                                    log("OkHttp3.RealCall.enqueue", capturedUrl + " code=" + code);
+                                    logNetwork(capturedMethod, capturedUrl, code);
                                 } catch (Exception ignored) {
-                                    log("OkHttp3.RealCall.enqueue", capturedUrl + " onResponse");
+                                    logNetwork(capturedMethod, capturedUrl, -1);
                                 }
                             } else if ("onFailure".equals(mname)) {
-                                log("OkHttp3.RealCall.enqueue", capturedUrl + " onFailure");
+                                logNetwork(capturedMethod, capturedUrl, -1);
                             }
                             return method.invoke(finalOrig, methodArgs);
                         });
                 }
             } catch (Exception e) {
-                log("OkHttp3.RealCall.enqueue", capturedUrl + " proxy-wrap-failed");
+                logNetwork(capturedMethod, capturedUrl, -1);
             }
         }
 
@@ -711,13 +725,18 @@ public class HookerBridge {
 
     // Volley StringRequest.deliverResponse(String)  instance: args={thiz, response}
     private static final int VOLLEY_PREVIEW = 256;
+    private static final String[] VOLLEY_METHODS = {"GET","POST","PUT","DELETE","HEAD","OPTIONS","TRACE","PATCH"};
     public Object hookVolleyDeliverResponse(Object[] args) {
-        String body = args[1] != null ? args[1].toString() : "";
-        if (body.length() > VOLLEY_PREVIEW) body = body.substring(0, VOLLEY_PREVIEW) + "...";
-        // Escape JSON special chars minimally
-        body = body.replace("\\", "\\\\").replace("\"", "\\\"")
-                   .replace("\r", " ").replace("\n", " ").replace("\t", " ");
-        log("Volley.StringRequest.deliverResponse", body);
+        String volleyUrl = "";
+        String volleyMethod = "GET";
+        try { volleyUrl = (String) args[0].getClass().getMethod("getUrl").invoke(args[0]); }
+        catch (Exception ignored) {}
+        try {
+            int m = (Integer) args[0].getClass().getMethod("getMethod").invoke(args[0]);
+            if (m >= 0 && m < VOLLEY_METHODS.length) volleyMethod = VOLLEY_METHODS[m];
+        } catch (Exception ignored) {}
+        // deliverResponse is the success path — status code is implicitly 200
+        logNetwork(volleyMethod, volleyUrl != null ? volleyUrl : "?", 200);
         if (backupVolleyDeliverResponse != null)
             safeInvokeObject(backupVolleyDeliverResponse, args[0], args[1]);
         return null;
@@ -881,57 +900,11 @@ public class HookerBridge {
 
     // ---- Phase 7: permission requests ----
 
-    private static String permissionCategory(String perm) {
-        if (perm == null) return "UNKNOWN";
-        // Camera
-        if (perm.equals("android.permission.CAMERA")) return "CAMERA";
-        // Microphone / Audio
-        if (perm.equals("android.permission.RECORD_AUDIO")) return "MICROPHONE";
-        // Location
-        if (perm.equals("android.permission.ACCESS_FINE_LOCATION"))   return "LOCATION_FINE";
-        if (perm.equals("android.permission.ACCESS_COARSE_LOCATION")) return "LOCATION_COARSE";
-        if (perm.equals("android.permission.ACCESS_BACKGROUND_LOCATION")) return "LOCATION_BACKGROUND";
-        // Contacts
-        if (perm.equals("android.permission.READ_CONTACTS"))   return "CONTACTS_READ";
-        if (perm.equals("android.permission.WRITE_CONTACTS"))  return "CONTACTS_WRITE";
-        // Telephony / SMS
-        if (perm.equals("android.permission.READ_PHONE_STATE"))  return "PHONE_STATE";
-        if (perm.equals("android.permission.CALL_PHONE"))         return "PHONE_CALL";
-        if (perm.equals("android.permission.READ_CALL_LOG"))      return "CALL_LOG_READ";
-        if (perm.equals("android.permission.WRITE_CALL_LOG"))     return "CALL_LOG_WRITE";
-        if (perm.equals("android.permission.SEND_SMS"))    return "SMS_SEND";
-        if (perm.equals("android.permission.RECEIVE_SMS")) return "SMS_RECEIVE";
-        if (perm.equals("android.permission.READ_SMS"))    return "SMS_READ";
-        // Storage / Media
-        if (perm.equals("android.permission.READ_EXTERNAL_STORAGE"))    return "STORAGE_READ";
-        if (perm.equals("android.permission.WRITE_EXTERNAL_STORAGE"))   return "STORAGE_WRITE";
-        if (perm.equals("android.permission.READ_MEDIA_IMAGES"))  return "MEDIA_IMAGES";
-        if (perm.equals("android.permission.READ_MEDIA_VIDEO"))   return "MEDIA_VIDEO";
-        if (perm.equals("android.permission.READ_MEDIA_AUDIO"))   return "MEDIA_AUDIO";
-        // Calendar
-        if (perm.equals("android.permission.READ_CALENDAR"))  return "CALENDAR_READ";
-        if (perm.equals("android.permission.WRITE_CALENDAR")) return "CALENDAR_WRITE";
-        // Body sensors
-        if (perm.equals("android.permission.BODY_SENSORS")) return "BODY_SENSORS";
-        // Activity recognition
-        if (perm.equals("android.permission.ACTIVITY_RECOGNITION")) return "ACTIVITY_RECOGNITION";
-        // Nearby / Bluetooth
-        if (perm.equals("android.permission.BLUETOOTH_SCAN"))    return "BLUETOOTH_SCAN";
-        if (perm.equals("android.permission.BLUETOOTH_CONNECT")) return "BLUETOOTH_CONNECT";
-        if (perm.equals("android.permission.NEARBY_WIFI_DEVICES")) return "NEARBY_WIFI";
-        // Notifications
-        if (perm.equals("android.permission.POST_NOTIFICATIONS")) return "NOTIFICATIONS";
-        // Fall back to the suffix after last dot
-        int dot = perm.lastIndexOf('.');
-        return dot >= 0 ? perm.substring(dot + 1) : perm;
-    }
-
     private static void logPermission(String method, Object[] permArray) {
         if (permArray == null) return;
         for (Object p : permArray) {
             String perm = p != null ? p.toString() : "";
-            String cat  = permissionCategory(perm);
-            log(method, cat + "(" + perm + ")");
+            log(method, perm);
         }
     }
 
@@ -1073,7 +1046,7 @@ public class HookerBridge {
             catch (Exception e) { Log.e(TAG, "backup checkPermission failed: " + e); }
         }
         if (result == null || result != 0)
-            log("Context.checkPermission", permissionCategory(perm) + "(" + perm + ")");
+            log("Context.checkPermission", perm);
         return result != null ? result : -1;
     }
 
@@ -1085,7 +1058,7 @@ public class HookerBridge {
             try { result = (Integer) backupContextCompatCheckSelfPermission.invoke(null, args[0], perm); }
             catch (Exception e) { Log.e(TAG, "backup ContextCompat.checkSelfPermission failed: " + e); }
         }
-        log("ContextCompat.checkSelfPermission", permissionCategory(perm) + "(" + perm + ")");
+        log("ContextCompat.checkSelfPermission", perm);
         return result != null ? result : -1;
     }
 
