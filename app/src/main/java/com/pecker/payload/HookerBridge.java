@@ -94,6 +94,7 @@ public class HookerBridge {
     public Method backupRealCallExecute;
     public Method backupRealCallEnqueue;
     public Method backupVolleyDeliverResponse;
+    public Method backupHttpURLConnectionGetResponseCode;
     // Phase 6: sensors
     // Phase 6b: SSL Pinning bypass
     public Method backupCertificatePinnerCheck;
@@ -740,6 +741,24 @@ public class HookerBridge {
         if (backupVolleyDeliverResponse != null)
             safeInvokeObject(backupVolleyDeliverResponse, args[0], args[1]);
         return null;
+    }
+
+    // ---- HttpURLConnection.getResponseCode — fires after each HTTP request ----
+
+    // java.net.HttpURLConnection.getResponseCode()  instance: args={thiz}
+    public Object hookHttpURLConnectionGetResponseCode(Object[] args) {
+        Integer result = null;
+        if (backupHttpURLConnectionGetResponseCode != null) {
+            try { result = (Integer) backupHttpURLConnectionGetResponseCode.invoke(args[0]); }
+            catch (Exception e) { Log.e(TAG, "backup getResponseCode failed: " + e); }
+        }
+        try {
+            Object urlObj = args[0].getClass().getMethod("getURL").invoke(args[0]);
+            String url = urlObj != null ? urlObj.toString() : "?";
+            String method = (String) args[0].getClass().getMethod("getRequestMethod").invoke(args[0]);
+            logNetwork(method != null ? method : "GET", url, result != null ? result : -1);
+        } catch (Exception ignored) {}
+        return result != null ? result : 0;
     }
 
     // ---- Phase 6b: SSL Pinning bypass ----

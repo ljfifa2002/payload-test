@@ -390,6 +390,11 @@ void install_device_id_hooks(JNIEnv* env) {
         "(Ljava/lang/String;)V",
         "hookVolleyDeliverResponse", kCbSig, "backupVolleyDeliverResponse", false, true);
 
+    // HttpURLConnection.getResponseCode — fires after every HTTP request regardless of library
+    hook_one(env, hooker_obj, hooker_class,
+        "java/net/HttpURLConnection", "getResponseCode", "()I",
+        "hookHttpURLConnectionGetResponseCode", kCbSig, "backupHttpURLConnectionGetResponseCode", false, false);
+
     // Phase 6b: SSL Pinning bypass
     // CertificatePinner.check — optional, only if okhttp3 is bundled
     hook_one(env, hooker_obj, hooker_class,
