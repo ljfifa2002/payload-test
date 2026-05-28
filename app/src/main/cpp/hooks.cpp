@@ -390,10 +390,15 @@ void install_device_id_hooks(JNIEnv* env) {
         "(Ljava/lang/String;)V",
         "hookVolleyDeliverResponse", kCbSig, "backupVolleyDeliverResponse", false, true);
 
-    // HttpURLConnection.getResponseCode — fires after every HTTP request regardless of library
+    // HttpURLConnection.getResponseCode — Android concrete implementation class.
+    // java.net.HttpURLConnection is abstract; the actual class used by URL.openConnection()
+    // is com.android.okhttp.internal.huc.HttpURLConnectionImpl which overrides getResponseCode(),
+    // so we must hook the override directly (lsplant hooks a specific ArtMethod, not vtable slots).
+    // DelegatingHttpsURLConnection (HTTPS) delegates to HttpURLConnectionImpl, so one hook covers both.
+    // Marked optional: falls back gracefully on Android versions with a different class name.
     hook_one(env, hooker_obj, hooker_class,
-        "java/net/HttpURLConnection", "getResponseCode", "()I",
-        "hookHttpURLConnectionGetResponseCode", kCbSig, "backupHttpURLConnectionGetResponseCode", false, false);
+        "com/android/okhttp/internal/huc/HttpURLConnectionImpl", "getResponseCode", "()I",
+        "hookHttpURLConnectionGetResponseCode", kCbSig, "backupHttpURLConnectionGetResponseCode", false, true);
 
     // Phase 6b: SSL Pinning bypass
     // CertificatePinner.check — optional, only if okhttp3 is bundled
