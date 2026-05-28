@@ -1,11 +1,61 @@
 package com.pecker.payload;
 
+import android.net.LocalServerSocket;
+import android.net.LocalSocket;
 import android.util.Log;
+import java.io.OutputStream;
 import java.lang.reflect.Method;
+import java.nio.charset.StandardCharsets;
 
 public class HookerBridge {
 
     private static final String TAG = "payload";
+
+    // Abstract Unix domain socket server for adb forward channel.
+    // Binds on class load (before any hook fires), so pecker-agent can
+    // connect as soon as adb forward is set up — no retry delay needed.
+    //
+    // adb forward equivalent: adb forward tcp:PORT localabstract:pecker
+    private static final class SocketChannel {
+        private static final String SOCKET_NAME = "pecker";
+        private static volatile OutputStream activeOut = null;
+        private static final Object LOCK = new Object();
+
+        static {
+            Thread t = new Thread(() -> {
+                try (LocalServerSocket srv = new LocalServerSocket(SOCKET_NAME)) {
+                    Log.i(TAG, "socket_channel: listening @" + SOCKET_NAME);
+                    while (true) {
+                        LocalSocket conn = srv.accept();
+                        Log.i(TAG, "socket_channel: client connected");
+                        synchronized (LOCK) { activeOut = conn.getOutputStream(); }
+                        // Block until client closes — signals task end.
+                        try { conn.getInputStream().read(); } catch (Exception ignored) {}
+                        synchronized (LOCK) {
+                            if (activeOut == conn.getOutputStream()) activeOut = null;
+                        }
+                        Log.i(TAG, "socket_channel: client disconnected");
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "socket_channel: fatal: " + e);
+                }
+            }, "pecker-socket");
+            t.setDaemon(true);
+            t.start();
+        }
+
+        static void send(String line) {
+            OutputStream out;
+            synchronized (LOCK) { out = activeOut; }
+            if (out == null) return;
+            try {
+                out.write((line + "\n").getBytes(StandardCharsets.UTF_8));
+                out.flush();
+            } catch (Exception e) {
+                synchronized (LOCK) { activeOut = null; }
+            }
+        }
+    }
 
     public Method backupGetDeviceId;
     public Method backupGetSubscriberId;
@@ -25,7 +75,6 @@ public class HookerBridge {
     // Phase 4
     public Method backupContentResolverQuery;
     public Method backupCameraManagerOpenCamera;
-    public Method backupMediaRecorderSetAudioSource;
     // Phase 4b: clipboard / camera / audio / process / shell / navigation
     public Method backupClipboardGetPrimaryClip;
     public Method backupCameraOpen0;
@@ -55,8 +104,35 @@ public class HookerBridge {
     public Method backupSensorRegister4Handler;
     // Phase 7: permissions
     public Method backupRequestPermissions;
-    public Method backupCheckSelfPermission;
     public Method backupActivityCompatRequestPermissions;
+    // Phase 7b: package install
+    public Method backupPackageInstallerCommit;
+    // Phase 8: cell info, wifi, package list, tasks, broadcast, media projection
+    public Method backupGetCellLocation;
+    public Method backupGetAllCellInfo;
+    public Method backupGetNetworkOperator;
+    public Method backupGetNetworkOperatorName;
+    public Method backupGetInstalledPackages;
+    public Method backupGetInstalledApplications;
+    public Method backupGetRunningTasks;
+    public Method backupWifiGetSSID;
+    public Method backupWifiGetBSSID;
+    public Method backupSendBroadcast;
+    public Method backupSendOrderedBroadcast;
+    public Method backupContextCheckPermission;
+    public Method backupContextCompatCheckSelfPermission;
+    public Method backupGetSystemService;
+    // Phase 8: third-party location SDKs (optional)
+    public Method backupBaiduLocationStart;
+    public Method backupAmapLocationStart;
+    // Phase 9: file stream constructors, tencent location
+    public Method backupFileInputStreamStr;
+    public Method backupFileInputStreamFile;
+    public Method backupFileOutputStreamStr;
+    public Method backupFileOutputStreamStrAppend;
+    public Method backupFileOutputStreamFile;
+    public Method backupFileOutputStreamFileAppend;
+    public Method backupTencentLocationStart;
 
     // LSPlant 6.4 calls the hooker as a virtual (instance) method:
     //   hookerInstance.hookXxx(Object[] args)
@@ -85,8 +161,9 @@ public class HookerBridge {
         int kept = 0;
         for (StackTraceElement f : frames) {
             String cls = f.getClassName();
-            // Skip VM internals, reflection, and our own bridge frames
+            // Skip VM internals, reflection, our own bridge frames, and LSPlant trampoline frames
             if (cls.startsWith("com.pecker.payload.")
+                    || cls.startsWith("LSPHooker_")
                     || cls.startsWith("java.lang.Thread")
                     || cls.startsWith("java.lang.reflect.")
                     || cls.startsWith("sun.reflect.")
@@ -99,15 +176,43 @@ public class HookerBridge {
               .append(':').append(f.getLineNumber());
             if (++kept == 12) break;
         }
+        if (kept == 0) {
+            StringBuilder diag = new StringBuilder("DIAG_EMPTY_STACK:");
+            for (StackTraceElement f : frames) {
+                diag.append(' ').append(f.getClassName()).append('.').append(f.getMethodName());
+            }
+            Log.w(TAG, diag.toString());
+        }
+        return sb.toString();
+    }
+
+    private static String jsonEscape(String s) {
+        if (s == null) return "";
+        StringBuilder sb = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            switch (c) {
+                case '"':  sb.append("\\\""); break;
+                case '\\': sb.append("\\\\"); break;
+                case '\n': sb.append("\\n");  break;
+                case '\r': sb.append("\\r");  break;
+                case '\t': sb.append("\\t");  break;
+                default:
+                    if (c < 0x20) { sb.append(String.format("\\u%04x", (int) c)); }
+                    else           { sb.append(c); }
+            }
+        }
         return sb.toString();
     }
 
     private static void log(String method, String data) {
         String stack = captureStack();
-        Log.i(TAG, "{\"type\":\"behavior\",\"method\":\"" + method
-                + "\",\"data\":\"" + data
-                + "\",\"stack\":\"" + stack
-                + "\",\"timestamp\":" + System.currentTimeMillis() + "}");
+        String json = "{\"type\":\"behavior\",\"method\":\"" + method
+                + "\",\"data\":\"" + jsonEscape(data)
+                + "\",\"stack\":\"" + jsonEscape(stack)
+                + "\",\"timestamp\":" + System.currentTimeMillis() + "}";
+        Log.i(TAG, json);
+        SocketChannel.send(json);
     }
 
     // ---- Instance hook callbacks ([Ljava/lang/Object;)Ljava/lang/Object; ----
@@ -116,28 +221,28 @@ public class HookerBridge {
     public Object hookGetDeviceId(Object[] args) {
         Object thiz = args[0];
         String v = backupGetDeviceId != null ? safeInvoke(backupGetDeviceId, thiz) : null;
-        log("TelephonyManager.getDeviceId", v != null ? v : "");
+        log("getDeviceId", v != null ? v : "");
         return v;
     }
 
     public Object hookGetSubscriberId(Object[] args) {
         Object thiz = args[0];
         String v = backupGetSubscriberId != null ? safeInvoke(backupGetSubscriberId, thiz) : null;
-        log("TelephonyManager.getSubscriberId", v != null ? v : "");
+        log("getSubscriberId", v != null ? v : "");
         return v;
     }
 
     public Object hookGetSimSerialNumber(Object[] args) {
         Object thiz = args[0];
         String v = backupGetSimSerialNumber != null ? safeInvoke(backupGetSimSerialNumber, thiz) : null;
-        log("TelephonyManager.getSimSerialNumber", v != null ? v : "");
+        log("getSimSerialNumber", v != null ? v : "");
         return v;
     }
 
     public Object hookGetLine1Number(Object[] args) {
         Object thiz = args[0];
         String v = backupGetLine1Number != null ? safeInvoke(backupGetLine1Number, thiz) : null;
-        log("TelephonyManager.getLine1Number", v != null ? v : "");
+        log("getLine1Number", v != null ? v : "");
         return v;
     }
 
@@ -148,14 +253,20 @@ public class HookerBridge {
         String v = backupSettingsSecureGetString != null
                 ? safeInvoke(backupSettingsSecureGetString, null, cr, name)
                 : null;
-        log("Settings.Secure.getString[" + name + "]", v != null ? v : "");
+        if ("android_id".equals(name)) {
+            log("getString_android_id", v != null ? v : "");
+        } else if ("bluetooth_address".equals(name)) {
+            log("getString_bluetooth_address", v != null ? v : "");
+        } else if ("bluetooth_name".equals(name)) {
+            log("getString_bluetooth_name", v != null ? v : "");
+        }
         return v;
     }
 
     public Object hookGetMacAddress(Object[] args) {
         Object thiz = args[0];
         String v = backupWifiGetMacAddress != null ? safeInvoke(backupWifiGetMacAddress, thiz) : null;
-        log("WifiInfo.getMacAddress", v != null ? v : "");
+        log("getMacAddress", v != null ? v : "");
         return v;
     }
 
@@ -170,7 +281,7 @@ public class HookerBridge {
                 if (i > 0) sb.append(':');
                 sb.append(String.format("%02x", v[i] & 0xff));
             }
-            log("NetworkInterface.getHardwareAddress", sb.toString());
+            log("getHardwareAddress", sb.toString());
         }
         return v;
     }
@@ -202,13 +313,12 @@ public class HookerBridge {
             try {
                 double lat = (Double) location.getClass().getMethod("getLatitude").invoke(location);
                 double lon = (Double) location.getClass().getMethod("getLongitude").invoke(location);
-                log("LocationManager.getLastKnownLocation[" + provider + "]",
-                    lat + "," + lon);
+                log("LocationManager.getLastKnownLocation", provider + " " + lat + "," + lon);
             } catch (Exception e) {
-                log("LocationManager.getLastKnownLocation[" + provider + "]", "err:" + e);
+                log("LocationManager.getLastKnownLocation", provider);
             }
         } else {
-            log("LocationManager.getLastKnownLocation[" + provider + "]", "null");
+            log("LocationManager.getLastKnownLocation", provider);
         }
         return location;
     }
@@ -301,32 +411,25 @@ public class HookerBridge {
         Object thiz   = args[0];
         Object uri    = args[1];
         String uriStr = uri != null ? uri.toString() : "";
-        // only log URIs that contain sensitive authority keywords
-        boolean sensitive = uriStr.contains("contact") || uriStr.contains("sms")
-                || uriStr.contains("mms") || uriStr.contains("call_log")
-                || uriStr.contains("calendar") || uriStr.contains("media");
         Object cursor = backupContentResolverQuery != null
                 ? safeInvokeObject(backupContentResolverQuery, thiz, args[1], args[2], args[3], args[4])
                 : null;
-        if (sensitive) log("ContentResolver.query", uriStr);
+        // Route to the same per-category keys as frida (hook.js)
+        String key = null;
+        if (uriStr.contains("contact"))                                      key = "ContentResolver.query_contacts";
+        else if (uriStr.contains("sms") || uriStr.contains("mms"))          key = "ContentResolver.query_sms";
+        else if (uriStr.contains("call_log") || uriStr.contains("calls"))   key = "ContentResolver.query_call_log";
+        else if (uriStr.contains("calendar"))                                key = "ContentResolver.query_calendar";
+        if (key != null) log(key, uriStr);
         return cursor;
     }
 
     // CameraManager.openCamera(String, StateCallback, Handler)  instance: args={thiz, cameraId, cb, handler}
     public Object hookCameraManagerOpenCamera(Object[] args) {
         String cameraId = args[1] != null ? args[1].toString() : "";
-        log("CameraManager.openCamera", cameraId);
+        log("Camera2.openCamera", cameraId);
         if (backupCameraManagerOpenCamera != null)
             safeInvokeObject(backupCameraManagerOpenCamera, args[0], args[1], args[2], args[3]);
-        return null;
-    }
-
-    // MediaRecorder.setAudioSource(int)  instance: args={thiz, audioSource}
-    public Object hookMediaRecorderSetAudioSource(Object[] args) {
-        int src = args[1] != null ? ((Number) args[1]).intValue() : -1;
-        log("MediaRecorder.setAudioSource", String.valueOf(src));
-        if (backupMediaRecorderSetAudioSource != null)
-            safeInvokeObject(backupMediaRecorderSetAudioSource, args[0], args[1]);
         return null;
     }
 
@@ -373,6 +476,7 @@ public class HookerBridge {
             } catch (Exception ignored) {}
         }
         log("ClipboardManager.getPrimaryClip", text);
+        log("ClipboardManager.getText", text);
         return clip;
     }
 
@@ -435,7 +539,7 @@ public class HookerBridge {
             }
             cmd = sb.toString();
         }
-        log("Runtime.exec[]", cmd);
+        log("Runtime.exec", cmd);
         return backupRuntimeExecArray != null
                 ? safeInvokeObject(backupRuntimeExecArray, args[0], args[1])
                 : null;
@@ -456,13 +560,11 @@ public class HookerBridge {
 
     // Activity.startActivity(Intent)  instance: args={thiz, intent}
     public Object hookStartActivity(Object[] args) {
-        String action = "";
-        if (args[1] != null) {
-            try { action = (String) args[1].getClass().getMethod("getAction").invoke(args[1]); }
-            catch (Exception ignored) {}
-            if (action == null) action = args[1].toString();
-        }
-        log("Activity.startActivity", action != null ? action : "");
+        String targetPkg = getIntentPackage(args[1]);
+        String currentPkg = getCurrentPackage(args[0]);
+        String key = (targetPkg != null && !targetPkg.isEmpty() && !targetPkg.equals(currentPkg))
+                ? "Activity.startActivity_other" : "Activity.startActivity_self";
+        log(key, targetPkg != null ? targetPkg : "");
         if (backupStartActivity != null)
             safeInvokeObject(backupStartActivity, args[0], args[1]);
         return null;
@@ -470,22 +572,37 @@ public class HookerBridge {
 
     // Activity.startActivityForResult(Intent, int)  instance: args={thiz, intent, requestCode}
     public Object hookStartActivityForResult(Object[] args) {
-        String action = "";
-        if (args[1] != null) {
-            try { action = (String) args[1].getClass().getMethod("getAction").invoke(args[1]); }
-            catch (Exception ignored) {}
-            if (action == null) action = args[1].toString();
-        }
-        int code = args[2] != null ? ((Number) args[2]).intValue() : -1;
-        log("Activity.startActivityForResult", (action != null ? action : "") + " requestCode=" + code);
+        String targetPkg = getIntentPackage(args[1]);
+        String currentPkg = getCurrentPackage(args[0]);
+        String key = (targetPkg != null && !targetPkg.isEmpty() && !targetPkg.equals(currentPkg))
+                ? "Activity.startActivity_other" : "Activity.startActivity_self";
+        log(key, targetPkg != null ? targetPkg : "");
         if (backupStartActivityForResult != null)
             safeInvokeObject(backupStartActivityForResult, args[0], args[1], args[2]);
         return null;
     }
 
+    private static String getIntentPackage(Object intent) {
+        if (intent == null) return null;
+        try {
+            Object component = intent.getClass().getMethod("getComponent").invoke(intent);
+            if (component != null)
+                return (String) component.getClass().getMethod("getPackageName").invoke(component);
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    private static String getCurrentPackage(Object context) {
+        if (context == null) return null;
+        try {
+            return (String) context.getClass().getMethod("getPackageName").invoke(context);
+        } catch (Exception ignored) {}
+        return null;
+    }
+
     // MediaRecorder.start()  instance: args={thiz}
     public Object hookMediaRecorderStart(Object[] args) {
-        log("MediaRecorder.start", "");
+        log("MediaRecorder.start_audio", "");
         if (backupMediaRecorderStart != null)
             safeInvokeObject(backupMediaRecorderStart, args[0]);
         return null;
@@ -499,7 +616,10 @@ public class HookerBridge {
             try { action = (String) args[2].getClass().getMethod("getAction").invoke(args[2]); }
             catch (Exception ignored) {}
         }
-        log("BroadcastReceiver.onReceive", action != null ? action : "");
+        if ("android.intent.action.BOOT_COMPLETED".equals(action) ||
+                "android.intent.action.QUICKBOOT_POWERON".equals(action)) {
+            log("BroadcastReceiver.onReceive_BOOT", action != null ? action : "");
+        }
         if (backupBroadcastReceiverOnReceive != null)
             safeInvokeObject(backupBroadcastReceiverOnReceive, args[0], args[1], args[2]);
         return null;
@@ -824,26 +944,254 @@ public class HookerBridge {
         return null;
     }
 
-    // Activity.checkSelfPermission(String permission)  instance: args={thiz, permission}
-    public Object hookCheckSelfPermission(Object[] args) {
-        String perm = args[1] != null ? args[1].toString() : "";
-        Integer result = null;
-        if (backupCheckSelfPermission != null) {
-            try { result = (Integer) backupCheckSelfPermission.invoke(args[0], perm); }
-            catch (Exception e) { Log.e(TAG, "backup checkSelfPermission failed: " + e); }
-        }
-        int r = result != null ? result : -1;
-        if (r != 0) log("Activity.checkSelfPermission",
-                        permissionCategory(perm) + "(" + perm + ")=DENIED");
-        return result != null ? result : -1;
-    }
-
     // ActivityCompat.requestPermissions(Activity, String[], int)  static: args={activity, perms, code}
     public Object hookActivityCompatRequestPermissions(Object[] args) {
         try { logPermission("ActivityCompat.requestPermissions", (Object[]) args[1]); }
         catch (Exception e) { log("ActivityCompat.requestPermissions", "?"); }
         if (backupActivityCompatRequestPermissions != null)
             safeInvokeObject(backupActivityCompatRequestPermissions, null, args[0], args[1], args[2]);
+        return null;
+    }
+
+    // PackageInstaller.Session.commit(IntentSender)  instance: args={thiz, statusReceiver}
+    public Object hookPackageInstallerCommit(Object[] args) {
+        log("PackageInstaller.Session.commit", "");
+        if (backupPackageInstallerCommit != null)
+            safeInvokeObject(backupPackageInstallerCommit, args[0], args[1]);
+        return null;
+    }
+
+    // ---- Phase 8: cell info, wifi, package list, tasks, broadcast, media projection ----
+
+    // TelephonyManager.getCellLocation()  instance: args={thiz}
+    public Object hookGetCellLocation(Object[] args) {
+        Object loc = backupGetCellLocation != null
+                ? safeInvokeObject(backupGetCellLocation, args[0])
+                : null;
+        log("TelephonyManager.getCellLocation", loc != null ? loc.toString() : "null");
+        return loc;
+    }
+
+    // TelephonyManager.getAllCellInfo()  instance: args={thiz}
+    public Object hookGetAllCellInfo(Object[] args) {
+        Object list = backupGetAllCellInfo != null
+                ? safeInvokeObject(backupGetAllCellInfo, args[0])
+                : null;
+        log("TelephonyManager.getAllCellInfo", list != null ? "count=" + getListSize(list) : "null");
+        return list;
+    }
+
+    // TelephonyManager.getNetworkOperator()  instance: args={thiz}
+    public Object hookGetNetworkOperator(Object[] args) {
+        String v = backupGetNetworkOperator != null ? safeInvoke(backupGetNetworkOperator, args[0]) : null;
+        log("TelephonyManager.getNetworkOperator", v != null ? v : "");
+        return v;
+    }
+
+    // TelephonyManager.getNetworkOperatorName()  instance: args={thiz}
+    public Object hookGetNetworkOperatorName(Object[] args) {
+        String v = backupGetNetworkOperatorName != null ? safeInvoke(backupGetNetworkOperatorName, args[0]) : null;
+        log("TelephonyManager.getNetworkOperatorName", v != null ? v : "");
+        return v;
+    }
+
+    // ApplicationPackageManager.getInstalledPackages(int)  instance: args={thiz, flags}
+    public Object hookGetInstalledPackages(Object[] args) {
+        Object list = backupGetInstalledPackages != null
+                ? safeInvokeObject(backupGetInstalledPackages, args[0], args[1])
+                : null;
+        log("PackageManager.getInstalledPackages", list != null ? "count=" + getListSize(list) : "null");
+        return list;
+    }
+
+    // ApplicationPackageManager.getInstalledApplications(int)  instance: args={thiz, flags}
+    public Object hookGetInstalledApplications(Object[] args) {
+        Object list = backupGetInstalledApplications != null
+                ? safeInvokeObject(backupGetInstalledApplications, args[0], args[1])
+                : null;
+        log("PackageManager.getInstalledApplications", list != null ? "count=" + getListSize(list) : "null");
+        return list;
+    }
+
+    // ActivityManager.getRunningTasks(int)  instance: args={thiz, maxNum}
+    public Object hookGetRunningTasks(Object[] args) {
+        Object list = backupGetRunningTasks != null
+                ? safeInvokeObject(backupGetRunningTasks, args[0], args[1])
+                : null;
+        log("ActivityManager.getRunningTasks", list != null ? "count=" + getListSize(list) : "null");
+        return list;
+    }
+
+    // WifiInfo.getSSID()  instance: args={thiz}
+    public Object hookWifiGetSSID(Object[] args) {
+        String v = backupWifiGetSSID != null ? safeInvoke(backupWifiGetSSID, args[0]) : null;
+        log("WifiInfo.getSSID", v != null ? v : "");
+        return v;
+    }
+
+    // WifiInfo.getBSSID()  instance: args={thiz}
+    public Object hookWifiGetBSSID(Object[] args) {
+        String v = backupWifiGetBSSID != null ? safeInvoke(backupWifiGetBSSID, args[0]) : null;
+        log("WifiInfo.getBSSID", v != null ? v : "");
+        return v;
+    }
+
+    // ContextWrapper.sendBroadcast(Intent)  instance: args={thiz, intent}
+    public Object hookSendBroadcast(Object[] args) {
+        String action = "";
+        if (args[1] != null) {
+            try { action = (String) args[1].getClass().getMethod("getAction").invoke(args[1]); }
+            catch (Exception ignored) {}
+            if (action == null) action = args[1].toString();
+        }
+        log("Context.sendBroadcast", action != null ? action : "");
+        if (backupSendBroadcast != null)
+            safeInvokeObject(backupSendBroadcast, args[0], args[1]);
+        return null;
+    }
+
+    // ContextWrapper.sendOrderedBroadcast(Intent, String)  instance: args={thiz, intent, receiverPermission}
+    public Object hookSendOrderedBroadcast(Object[] args) {
+        String action = "";
+        if (args[1] != null) {
+            try { action = (String) args[1].getClass().getMethod("getAction").invoke(args[1]); }
+            catch (Exception ignored) {}
+            if (action == null) action = args[1].toString();
+        }
+        log("Context.sendBroadcast", action != null ? action : "");
+        if (backupSendOrderedBroadcast != null)
+            safeInvokeObject(backupSendOrderedBroadcast, args[0], args[1], args[2]);
+        return null;
+    }
+
+    // ContextWrapper.checkPermission(String, int, int)  instance: args={thiz, permission, pid, uid}
+    public Object hookContextCheckPermission(Object[] args) {
+        String perm = args[1] != null ? args[1].toString() : "";
+        Integer result = null;
+        if (backupContextCheckPermission != null) {
+            try { result = (Integer) backupContextCheckPermission.invoke(args[0], perm, args[2], args[3]); }
+            catch (Exception e) { Log.e(TAG, "backup checkPermission failed: " + e); }
+        }
+        if (result == null || result != 0)
+            log("Context.checkPermission", permissionCategory(perm) + "(" + perm + ")");
+        return result != null ? result : -1;
+    }
+
+    // ContextCompat.checkSelfPermission(Context, String)  static: args={context, permission}
+    public Object hookContextCompatCheckSelfPermission(Object[] args) {
+        String perm = args[1] != null ? args[1].toString() : "";
+        Integer result = null;
+        if (backupContextCompatCheckSelfPermission != null) {
+            try { result = (Integer) backupContextCompatCheckSelfPermission.invoke(null, args[0], perm); }
+            catch (Exception e) { Log.e(TAG, "backup ContextCompat.checkSelfPermission failed: " + e); }
+        }
+        log("ContextCompat.checkSelfPermission", permissionCategory(perm) + "(" + perm + ")");
+        return result != null ? result : -1;
+    }
+
+    // ContextWrapper.getSystemService(String)  instance: args={thiz, name}
+    // Only log when name is "media_projection" to avoid noise.
+    public Object hookGetSystemService(Object[] args) {
+        Object result = backupGetSystemService != null
+                ? safeInvokeObject(backupGetSystemService, args[0], args[1])
+                : null;
+        if (args[1] != null && "media_projection".equals(args[1].toString()))
+            log("getSystemService_media_projection", "");
+        return result;
+    }
+
+    // Baidu LocationClient.start()  instance: args={thiz}
+    public Object hookBaiduLocationStart(Object[] args) {
+        log("LocationClient.start", "baidu");
+        if (backupBaiduLocationStart != null)
+            safeInvokeObject(backupBaiduLocationStart, args[0]);
+        return null;
+    }
+
+    // AMapLocationClient.startLocation()  instance: args={thiz}
+    public Object hookAmapLocationStart(Object[] args) {
+        log("AMapLocationClient.startLocation", "amap");
+        if (backupAmapLocationStart != null)
+            safeInvokeObject(backupAmapLocationStart, args[0]);
+        return null;
+    }
+
+    // ---- Phase 9: file stream constructors (external storage only) ----
+
+    private static boolean isExternalStorage(String path) {
+        if (path == null) return false;
+        return path.startsWith("/sdcard")
+            || path.startsWith("/storage/")
+            || path.startsWith("/mnt/");
+    }
+
+    private static String fileArgToPath(Object arg) {
+        if (arg == null) return null;
+        if (arg instanceof String) return (String) arg;
+        try {
+            return (String) arg.getClass().getMethod("getAbsolutePath").invoke(arg);
+        } catch (Exception e) { return arg.toString(); }
+    }
+
+    // FileInputStream(String path)  instance: args={thiz, path}
+    public Object hookFileInputStreamStr(Object[] args) {
+        if (backupFileInputStreamStr != null)
+            safeInvokeObject(backupFileInputStreamStr, args[0], args[1]);
+        String path = args[1] != null ? args[1].toString() : "";
+        if (isExternalStorage(path)) log("FileInputStream.read", path);
+        return null;
+    }
+
+    // FileInputStream(File file)  instance: args={thiz, file}
+    public Object hookFileInputStreamFile(Object[] args) {
+        if (backupFileInputStreamFile != null)
+            safeInvokeObject(backupFileInputStreamFile, args[0], args[1]);
+        String path = fileArgToPath(args[1]);
+        if (isExternalStorage(path)) log("FileInputStream.read", path);
+        return null;
+    }
+
+    // FileOutputStream(String path)  instance: args={thiz, path}
+    public Object hookFileOutputStreamStr(Object[] args) {
+        if (backupFileOutputStreamStr != null)
+            safeInvokeObject(backupFileOutputStreamStr, args[0], args[1]);
+        String path = args[1] != null ? args[1].toString() : "";
+        if (isExternalStorage(path)) log("FileOutputStream.write", path);
+        return null;
+    }
+
+    // FileOutputStream(String path, boolean append)  instance: args={thiz, path, append}
+    public Object hookFileOutputStreamStrAppend(Object[] args) {
+        if (backupFileOutputStreamStrAppend != null)
+            safeInvokeObject(backupFileOutputStreamStrAppend, args[0], args[1], args[2]);
+        String path = args[1] != null ? args[1].toString() : "";
+        if (isExternalStorage(path)) log("FileOutputStream.write", path);
+        return null;
+    }
+
+    // FileOutputStream(File file)  instance: args={thiz, file}
+    public Object hookFileOutputStreamFile(Object[] args) {
+        if (backupFileOutputStreamFile != null)
+            safeInvokeObject(backupFileOutputStreamFile, args[0], args[1]);
+        String path = fileArgToPath(args[1]);
+        if (isExternalStorage(path)) log("FileOutputStream.write", path);
+        return null;
+    }
+
+    // FileOutputStream(File file, boolean append)  instance: args={thiz, file, append}
+    public Object hookFileOutputStreamFileAppend(Object[] args) {
+        if (backupFileOutputStreamFileAppend != null)
+            safeInvokeObject(backupFileOutputStreamFileAppend, args[0], args[1], args[2]);
+        String path = fileArgToPath(args[1]);
+        if (isExternalStorage(path)) log("FileOutputStream.write", path);
+        return null;
+    }
+
+    // TencentLocationManager.requestLocationUpdates()  instance: args={thiz, request, listener}
+    public Object hookTencentLocationStart(Object[] args) {
+        log("TencentLocationManager.requestLocationUpdates", "tencent");
+        if (backupTencentLocationStart != null)
+            safeInvokeObject(backupTencentLocationStart, args[0], args[1], args[2]);
         return null;
     }
 }

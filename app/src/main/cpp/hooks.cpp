@@ -305,10 +305,6 @@ void install_device_id_hooks(JNIEnv* env) {
         "(Ljava/lang/String;Landroid/hardware/camera2/CameraDevice$StateCallback;Landroid/os/Handler;)V",
         "hookCameraManagerOpenCamera", kCbSig, "backupCameraManagerOpenCamera", false);
 
-    hook_one(env, hooker_obj, hooker_class,
-        "android/media/MediaRecorder", "setAudioSource", "(I)V",
-        "hookMediaRecorderSetAudioSource", kCbSig, "backupMediaRecorderSetAudioSource", false);
-
     // Phase 5: network
     hook_one(env, hooker_obj, hooker_class,
         "java/net/URL", "openConnection", "()Ljava/net/URLConnection;",
@@ -433,17 +429,133 @@ void install_device_id_hooks(JNIEnv* env) {
         "([Ljava/lang/String;I)V",
         "hookRequestPermissions", kCbSig, "backupRequestPermissions", false);
 
-    hook_one(env, hooker_obj, hooker_class,
-        "android/app/Activity", "checkSelfPermission",
-        "(Ljava/lang/String;)I",
-        "hookCheckSelfPermission", kCbSig, "backupCheckSelfPermission", false);
-
     // ActivityCompat.requestPermissions — optional, only if androidx is bundled
     hook_one(env, hooker_obj, hooker_class,
         "androidx/core/app/ActivityCompat", "requestPermissions",
         "(Landroid/app/Activity;[Ljava/lang/String;I)V",
         "hookActivityCompatRequestPermissions", kCbSig,
         "backupActivityCompatRequestPermissions", true, true);
+
+    // Phase 7b: PackageInstaller.Session.commit
+    hook_one(env, hooker_obj, hooker_class,
+        "android/content/pm/PackageInstaller$Session", "commit",
+        "(Landroid/content/IntentSender;)V",
+        "hookPackageInstallerCommit", kCbSig, "backupPackageInstallerCommit", false);
+
+    // Phase 8: cell info, wifi, package list, tasks, broadcast, media projection
+    hook_one(env, hooker_obj, hooker_class,
+        "android/telephony/TelephonyManager", "getCellLocation",
+        "()Landroid/telephony/CellLocation;",
+        "hookGetCellLocation", kCbSig, "backupGetCellLocation", false);
+
+    hook_one(env, hooker_obj, hooker_class,
+        "android/telephony/TelephonyManager", "getAllCellInfo",
+        "()Ljava/util/List;",
+        "hookGetAllCellInfo", kCbSig, "backupGetAllCellInfo", false);
+
+    hook_one(env, hooker_obj, hooker_class,
+        "android/telephony/TelephonyManager", "getNetworkOperator",
+        "()Ljava/lang/String;",
+        "hookGetNetworkOperator", kCbSig, "backupGetNetworkOperator", false);
+
+    hook_one(env, hooker_obj, hooker_class,
+        "android/telephony/TelephonyManager", "getNetworkOperatorName",
+        "()Ljava/lang/String;",
+        "hookGetNetworkOperatorName", kCbSig, "backupGetNetworkOperatorName", false);
+
+    // ApplicationPackageManager — concrete impl of PackageManager; use app classloader
+    hook_one(env, hooker_obj, hooker_class,
+        "android/app/ApplicationPackageManager", "getInstalledPackages",
+        "(I)Ljava/util/List;",
+        "hookGetInstalledPackages", kCbSig, "backupGetInstalledPackages", false, true);
+
+    hook_one(env, hooker_obj, hooker_class,
+        "android/app/ApplicationPackageManager", "getInstalledApplications",
+        "(I)Ljava/util/List;",
+        "hookGetInstalledApplications", kCbSig, "backupGetInstalledApplications", false, true);
+
+    hook_one(env, hooker_obj, hooker_class,
+        "android/app/ActivityManager", "getRunningTasks",
+        "(I)Ljava/util/List;",
+        "hookGetRunningTasks", kCbSig, "backupGetRunningTasks", false);
+
+    hook_one(env, hooker_obj, hooker_class,
+        "android/net/wifi/WifiInfo", "getSSID",
+        "()Ljava/lang/String;",
+        "hookWifiGetSSID", kCbSig, "backupWifiGetSSID", false);
+
+    hook_one(env, hooker_obj, hooker_class,
+        "android/net/wifi/WifiInfo", "getBSSID",
+        "()Ljava/lang/String;",
+        "hookWifiGetBSSID", kCbSig, "backupWifiGetBSSID", false);
+
+    hook_one(env, hooker_obj, hooker_class,
+        "android/content/ContextWrapper", "sendBroadcast",
+        "(Landroid/content/Intent;)V",
+        "hookSendBroadcast", kCbSig, "backupSendBroadcast", false);
+
+    hook_one(env, hooker_obj, hooker_class,
+        "android/content/ContextWrapper", "sendOrderedBroadcast",
+        "(Landroid/content/Intent;Ljava/lang/String;)V",
+        "hookSendOrderedBroadcast", kCbSig, "backupSendOrderedBroadcast", false);
+
+    hook_one(env, hooker_obj, hooker_class,
+        "android/content/ContextWrapper", "checkPermission",
+        "(Ljava/lang/String;II)I",
+        "hookContextCheckPermission", kCbSig, "backupContextCheckPermission", false);
+
+    // ContextCompat.checkSelfPermission — static, use app classloader
+    hook_one(env, hooker_obj, hooker_class,
+        "androidx/core/content/ContextCompat", "checkSelfPermission",
+        "(Landroid/content/Context;Ljava/lang/String;)I",
+        "hookContextCompatCheckSelfPermission", kCbSig,
+        "backupContextCompatCheckSelfPermission", true, true);
+
+    // getSystemService filtered on "media_projection" only
+    hook_one(env, hooker_obj, hooker_class,
+        "android/content/ContextWrapper", "getSystemService",
+        "(Ljava/lang/String;)Ljava/lang/Object;",
+        "hookGetSystemService", kCbSig, "backupGetSystemService", false);
+
+    // Third-party location SDKs — optional
+    hook_one(env, hooker_obj, hooker_class,
+        "com/baidu/location/LocationClient", "start", "()V",
+        "hookBaiduLocationStart", kCbSig, "backupBaiduLocationStart", false, true);
+
+    hook_one(env, hooker_obj, hooker_class,
+        "com/amap/api/location/AMapLocationClient", "startLocation", "()V",
+        "hookAmapLocationStart", kCbSig, "backupAmapLocationStart", false, true);
+
+    // Phase 9: FileInputStream / FileOutputStream constructors (external storage filter in Java)
+    hook_one(env, hooker_obj, hooker_class,
+        "java/io/FileInputStream", "<init>", "(Ljava/lang/String;)V",
+        "hookFileInputStreamStr", kCbSig, "backupFileInputStreamStr", false);
+
+    hook_one(env, hooker_obj, hooker_class,
+        "java/io/FileInputStream", "<init>", "(Ljava/io/File;)V",
+        "hookFileInputStreamFile", kCbSig, "backupFileInputStreamFile", false);
+
+    hook_one(env, hooker_obj, hooker_class,
+        "java/io/FileOutputStream", "<init>", "(Ljava/lang/String;)V",
+        "hookFileOutputStreamStr", kCbSig, "backupFileOutputStreamStr", false);
+
+    hook_one(env, hooker_obj, hooker_class,
+        "java/io/FileOutputStream", "<init>", "(Ljava/lang/String;Z)V",
+        "hookFileOutputStreamStrAppend", kCbSig, "backupFileOutputStreamStrAppend", false);
+
+    hook_one(env, hooker_obj, hooker_class,
+        "java/io/FileOutputStream", "<init>", "(Ljava/io/File;)V",
+        "hookFileOutputStreamFile", kCbSig, "backupFileOutputStreamFile", false);
+
+    hook_one(env, hooker_obj, hooker_class,
+        "java/io/FileOutputStream", "<init>", "(Ljava/io/File;Z)V",
+        "hookFileOutputStreamFileAppend", kCbSig, "backupFileOutputStreamFileAppend", false);
+
+    // TencentLocationManager — optional
+    hook_one(env, hooker_obj, hooker_class,
+        "com/tencent/map/geolocation/TencentLocationManager", "requestLocationUpdates",
+        "(Lcom/tencent/map/geolocation/TencentLocationRequest;Lcom/tencent/map/geolocation/TencentLocationListener;)I",
+        "hookTencentLocationStart", kCbSig, "backupTencentLocationStart", false, true);
 
     LOGI("hooks: device id hooks installed");
 }
