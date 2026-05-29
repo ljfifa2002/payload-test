@@ -83,6 +83,7 @@ static void payload_init() {
 
     install_device_id_hooks(env);
     install_art_inline_hooks(env, vm);
+    init_ssl_hooks_jni(vm, env);
     install_ssl_hooks();
     LOGI("payload init ok");
 }

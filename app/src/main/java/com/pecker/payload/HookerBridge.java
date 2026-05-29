@@ -217,11 +217,27 @@ public class HookerBridge {
     }
 
     private static void logNetwork(String httpMethod, String url, int statusCode) {
-        String json = "{\"type\":\"network\""
-                + ",\"method\":\"" + jsonEscape(httpMethod) + "\""
-                + ",\"url\":\"" + jsonEscape(url) + "\""
-                + ",\"statusCode\":" + statusCode
-                + ",\"timestamp\":" + System.currentTimeMillis() + "}";
+        logNetworkFull(httpMethod, url, statusCode, null, null);
+    }
+
+    // Public so JNI (ssl_hooks.cpp) can call it via reflection-free static dispatch.
+    public static void jniLogNetwork(String httpMethod, String url, int statusCode,
+                                     String reqBody, String respBody) {
+        logNetworkFull(httpMethod, url, statusCode, reqBody, respBody);
+    }
+
+    private static void logNetworkFull(String httpMethod, String url, int statusCode,
+                                       String reqBody, String respBody) {
+        StringBuilder sb = new StringBuilder("{\"type\":\"network\"")
+                .append(",\"method\":\"").append(jsonEscape(httpMethod)).append('"')
+                .append(",\"url\":\"").append(jsonEscape(url)).append('"')
+                .append(",\"statusCode\":").append(statusCode);
+        if (reqBody != null && !reqBody.isEmpty())
+            sb.append(",\"requestBody\":\"").append(jsonEscape(reqBody)).append('"');
+        if (respBody != null && !respBody.isEmpty())
+            sb.append(",\"responseBody\":\"").append(jsonEscape(respBody)).append('"');
+        sb.append(",\"timestamp\":").append(System.currentTimeMillis()).append('}');
+        String json = sb.toString();
         Log.i(TAG, json);
         SocketChannel.send(json);
     }
@@ -640,6 +656,9 @@ public class HookerBridge {
 
     // RealCall.execute()  instance: args={thiz}
     public Object hookRealCallExecute(Object[] args) {
+        // Capture request body before execution (body stream not yet consumed).
+        String reqBody = extractOkHttpRequestBody(args[0]);
+
         Object response = backupRealCallExecute != null
                 ? safeInvokeObject(backupRealCallExecute, args[0])
                 : null;
@@ -650,11 +669,48 @@ public class HookerBridge {
             int code = response != null
                     ? (Integer) response.getClass().getMethod("code").invoke(response)
                     : -1;
-            logNetwork(httpMethod != null ? httpMethod : "?", url, code);
+            String respBody = response != null ? peekOkHttpResponseBody(response) : null;
+            logNetworkFull(httpMethod != null ? httpMethod : "?", url, code, reqBody, respBody);
         } catch (Exception e) {
             logNetwork("?", "?", -1);
         }
         return response;
+    }
+
+    private static final int BODY_PREVIEW = 4096;
+
+    // Reads up to BODY_PREVIEW bytes from an OkHttp RequestBody by writing to a
+    // temporary okio.Buffer.  Returns null on any failure (one-shot bodies, etc.).
+    private static String extractOkHttpRequestBody(Object realCall) {
+        try {
+            Object request = realCall.getClass().getMethod("request").invoke(realCall);
+            Object body = request.getClass().getMethod("body").invoke(request);
+            if (body == null) return null;
+            // Check content length — skip bodies > 256KB to avoid OOM
+            long len = (Long) body.getClass().getMethod("contentLength").invoke(body);
+            if (len > 262144) return null;
+            // Create an okio.Buffer and write the body into it
+            Class<?> bufClass = Class.forName("okio.Buffer");
+            Object buf = bufClass.newInstance();
+            body.getClass().getMethod("writeTo", Class.forName("okio.BufferedSink")).invoke(body, buf);
+            long size = (Long) bufClass.getMethod("size").invoke(buf);
+            int readLen = (int) Math.min(size, BODY_PREVIEW);
+            byte[] bytes = (byte[]) bufClass.getMethod("readByteArray", long.class).invoke(buf, (long) readLen);
+            return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    // Uses OkHttp's peekBody() to read up to BODY_PREVIEW bytes without consuming the stream.
+    private static String peekOkHttpResponseBody(Object response) {
+        try {
+            Object peeked = response.getClass()
+                    .getMethod("peekBody", long.class).invoke(response, (long) BODY_PREVIEW);
+            return (String) peeked.getClass().getMethod("string").invoke(peeked);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     // RealCall.enqueue(Callback)  instance: args={thiz, callback}
@@ -665,6 +721,7 @@ public class HookerBridge {
         Object origCallback = args[1];
         String url;
         String httpMethod;
+        String reqBody;
         try {
             Object request = realCall.getClass().getMethod("request").invoke(realCall);
             url = request.getClass().getMethod("url").invoke(request).toString();
@@ -674,8 +731,10 @@ public class HookerBridge {
             url = "?";
             httpMethod = "?";
         }
+        reqBody = extractOkHttpRequestBody(realCall);
         final String capturedUrl = url;
         final String capturedMethod = httpMethod;
+        final String capturedReqBody = reqBody;
 
         // Build a proxy that implements okhttp3.Callback
         Object wrappedCallback = origCallback;
@@ -704,7 +763,8 @@ public class HookerBridge {
                                 try {
                                     int code = (Integer) methodArgs[1].getClass()
                                             .getMethod("code").invoke(methodArgs[1]);
-                                    logNetwork(capturedMethod, capturedUrl, code);
+                                    String respBody = peekOkHttpResponseBody(methodArgs[1]);
+                                    logNetworkFull(capturedMethod, capturedUrl, code, capturedReqBody, respBody);
                                 } catch (Exception ignored) {
                                     logNetwork(capturedMethod, capturedUrl, -1);
                                 }
