@@ -850,7 +850,12 @@ public class HookerBridge {
         }
         @Override public void flush() throws java.io.IOException { base.flush(); }
         @Override public void close() throws java.io.IOException { base.close(); }
-        String get() { return buf.size() > 0 ? buf.toString() : null; }
+        String get() {
+            if (buf.size() == 0) return null;
+            byte[] bytes = buf.toByteArray();
+            return isBinaryContent(bytes, bytes.length) ? null
+                    : buf.toString(java.nio.charset.StandardCharsets.UTF_8.name());
+        }
     }
 
     // getOutputStream  instance: args={thiz}
@@ -915,14 +920,27 @@ public class HookerBridge {
                 if (n < 0) break;
                 total += n;
             }
-            String respBody = total > 0 ? new String(buf, 0, total, java.nio.charset.StandardCharsets.UTF_8) : null;
+            String respBody = (total > 0 && !isBinaryContent(buf, total))
+                    ? new String(buf, 0, total, java.nio.charset.StandardCharsets.UTF_8)
+                    : null;
 
             int key = System.identityHashCode(conn);
             String[] pending = connPending.remove(key);
             if (pending != null) {
+                // Normal path: pending was set by getResponseCode hook.
                 int code = -1;
                 try { code = Integer.parseInt(pending[2]); } catch (NumberFormatException ignored) {}
                 logNetworkFull(pending[1], pending[0], code, pending[3], respBody);
+            } else if (respBody != null) {
+                // Fallback: getInputStream fired without a preceding getResponseCode hook
+                // (e.g. after an HTTP redirect that consumed the earlier pending entry).
+                try {
+                    Object urlObj = conn.getClass().getMethod("getURL").invoke(conn);
+                    String url = urlObj != null ? urlObj.toString() : "?";
+                    String method = (String) conn.getClass().getMethod("getRequestMethod").invoke(conn);
+                    if (method == null) method = "GET";
+                    logNetworkFull(method, url, -1, null, respBody);
+                } catch (Exception ignored) {}
             }
 
             if (total > 0) {
@@ -931,6 +949,19 @@ public class HookerBridge {
             }
         } catch (Exception e) { Log.e(TAG, "readConnBody failed: " + e); }
         return realIs;
+    }
+
+    // Returns true if buf[0..len) looks like binary (> 12% C0 control codes).
+    // Excludes: tab (0x09), LF (0x0A), CR (0x0D) which are valid in text.
+    private static boolean isBinaryContent(byte[] buf, int len) {
+        if (len == 0) return false;
+        int check = Math.min(len, 128);
+        int ctrl = 0;
+        for (int i = 0; i < check; i++) {
+            int b = buf[i] & 0xFF;
+            if (b < 0x20 && b != 0x09 && b != 0x0A && b != 0x0D) ctrl++;
+        }
+        return ctrl * 8 > check; // > 12.5% control chars → binary
     }
 
     // ---- Phase 6b: SSL Pinning bypass ----
