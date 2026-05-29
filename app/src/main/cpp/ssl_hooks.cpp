@@ -157,9 +157,38 @@ static int parse_status(const char* data, int len) {
 
 static void send_network(const std::string& method, const std::string& url,
                           int status, const std::string& reqBody, const std::string& respBody) {
-    if (!g_cls || !g_mid) return;
+    if (!g_vm) return;
     JNIEnv* env = get_env();
     if (!env) return;
+
+    // Lazy JNI init: FindClass deferred until first SSL callback so that
+    // HookerBridge is guaranteed to be loaded (constructor-time FindClass
+    // would leave a pending exception and break System.loadLibrary).
+    if (!g_cls || !g_mid) {
+        static std::mutex init_mu;
+        std::lock_guard<std::mutex> lk(init_mu);
+        if (!g_cls) {
+            jclass local = env->FindClass("com/pecker/payload/HookerBridge");
+            if (!local || env->ExceptionCheck()) {
+                env->ExceptionClear();
+                return;
+            }
+            g_cls = reinterpret_cast<jclass>(env->NewGlobalRef(local));
+            env->DeleteLocalRef(local);
+        }
+        if (g_cls && !g_mid) {
+            g_mid = env->GetStaticMethodID(g_cls, "jniLogNetwork",
+                "(Ljava/lang/String;Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;)V");
+            if (!g_mid) {
+                env->ExceptionClear();
+                env->DeleteGlobalRef(g_cls);
+                g_cls = nullptr;
+                return;
+            }
+            LOGI("ssl_hooks: JNI bridge ready (lazy)");
+        }
+        if (!g_cls || !g_mid) return;
+    }
 
     auto toJStr = [&](const std::string& s) -> jstring {
         return env->NewStringUTF(s.c_str());
@@ -276,15 +305,10 @@ void install_ssl_hooks() {
     }
 }
 
-void init_ssl_hooks_jni(JavaVM* vm, JNIEnv* env) {
+void init_ssl_hooks_jni(JavaVM* vm, JNIEnv* /*env*/) {
+    // Only store the JavaVM pointer. FindClass is deferred to send_network()
+    // (lazy, on first SSL callback) so that the constructor does not leave a
+    // pending Java exception that would break System.loadLibrary().
     g_vm = vm;
-    jclass local = env->FindClass("com/pecker/payload/HookerBridge");
-    if (!local) { LOGE("ssl_hooks: HookerBridge class not found"); return; }
-    g_cls = reinterpret_cast<jclass>(env->NewGlobalRef(local));
-    env->DeleteLocalRef(local);
-    // signature: (Ljava/lang/String;Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;)V
-    g_mid = env->GetStaticMethodID(g_cls, "jniLogNetwork",
-        "(Ljava/lang/String;Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;)V");
-    if (!g_mid) { LOGE("ssl_hooks: jniLogNetwork method not found"); return; }
-    LOGI("ssl_hooks: JNI bridge ready");
+    LOGI("ssl_hooks: JavaVM stored, JNI class lookup deferred");
 }
