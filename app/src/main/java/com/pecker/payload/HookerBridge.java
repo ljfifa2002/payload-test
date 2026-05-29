@@ -689,12 +689,17 @@ public class HookerBridge {
             // Check content length — skip bodies > 256KB to avoid OOM
             long len = (Long) body.getClass().getMethod("contentLength").invoke(body);
             if (len > 262144) return null;
-            // Create an okio.Buffer and write the body into it
-            Class<?> bufClass = Class.forName("okio.Buffer");
+            // Use the app's ClassLoader (from realCall) to load okio classes.
+            // Class.forName() uses HookerBridge's ClassLoader which cannot see
+            // the app's OkHttp/Okio dependency.
+            ClassLoader appCL = realCall.getClass().getClassLoader();
+            Class<?> bufClass = Class.forName("okio.Buffer", true, appCL);
+            Class<?> bufferedSinkClass = Class.forName("okio.BufferedSink", true, appCL);
             Object buf = bufClass.newInstance();
-            body.getClass().getMethod("writeTo", Class.forName("okio.BufferedSink")).invoke(body, buf);
+            body.getClass().getMethod("writeTo", bufferedSinkClass).invoke(body, buf);
             long size = (Long) bufClass.getMethod("size").invoke(buf);
             int readLen = (int) Math.min(size, BODY_PREVIEW);
+            if (readLen <= 0) return null;
             byte[] bytes = (byte[]) bufClass.getMethod("readByteArray", long.class).invoke(buf, (long) readLen);
             return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
         } catch (Exception e) {
