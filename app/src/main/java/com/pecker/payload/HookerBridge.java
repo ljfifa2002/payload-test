@@ -854,7 +854,7 @@ public class HookerBridge {
             if (buf.size() == 0) return null;
             byte[] bytes = buf.toByteArray();
             return isBinaryContent(bytes, bytes.length) ? null
-                    : buf.toString(java.nio.charset.StandardCharsets.UTF_8.name());
+                    : new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
         }
     }
 
