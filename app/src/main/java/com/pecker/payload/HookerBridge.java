@@ -95,6 +95,9 @@ public class HookerBridge {
     public Method backupRealCallEnqueue;
     public Method backupVolleyDeliverResponse;
     public Method backupHttpURLConnectionGetResponseCode;
+    public Method backupHttpURLConnectionGetOutputStream;
+    public Method backupHttpURLConnectionGetInputStream;
+    public Method backupHttpURLConnectionGetErrorStream;
     // Phase 6: sensors
     // Phase 6b: SSL Pinning bypass
     public Method backupCertificatePinnerCheck;
@@ -810,6 +813,59 @@ public class HookerBridge {
 
     // ---- HttpURLConnection.getResponseCode — fires after each HTTP request ----
 
+    // ---- HttpURLConnection body capture ----
+    //
+    // Data flow:
+    //   getOutputStream() → CachingOutputStream (buffers request body)
+    //   getResponseCode() → stores PendingLog{url, method, code, reqBody}
+    //   getInputStream()  → reads response body, completes log, returns SequenceInputStream
+    //   getErrorStream()  → same as getInputStream for 4xx/5xx
+    //
+    // Key: System.identityHashCode(conn) — cheap int, safe with ConcurrentHashMap.
+    // Cleaned up when log entry is completed (getInputStream/Error) or when fallback
+    // fires in getResponseCode if the connection never delivers a body.
+
+    private static final java.util.concurrent.ConcurrentHashMap<Integer, CachingOutputStream>
+            connOutStreams = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static final java.util.concurrent.ConcurrentHashMap<Integer, String[]>
+            connPending = new java.util.concurrent.ConcurrentHashMap<>();
+    // connPending value: String[4] = {url, method, statusCode-as-string, reqBody}
+
+    private static class CachingOutputStream extends java.io.OutputStream {
+        private final java.io.OutputStream base;
+        private final java.io.ByteArrayOutputStream buf = new java.io.ByteArrayOutputStream();
+        private boolean capped;
+        CachingOutputStream(java.io.OutputStream base) { this.base = base; }
+        @Override public void write(int b) throws java.io.IOException {
+            base.write(b);
+            if (!capped) { buf.write(b); if (buf.size() >= BODY_PREVIEW) capped = true; }
+        }
+        @Override public void write(byte[] b, int off, int len) throws java.io.IOException {
+            base.write(b, off, len);
+            if (!capped && len > 0) {
+                int rem = BODY_PREVIEW - buf.size();
+                if (rem > 0) { buf.write(b, off, Math.min(len, rem)); if (buf.size() >= BODY_PREVIEW) capped = true; }
+            }
+        }
+        @Override public void flush() throws java.io.IOException { base.flush(); }
+        @Override public void close() throws java.io.IOException { base.close(); }
+        String get() { return buf.size() > 0 ? buf.toString() : null; }
+    }
+
+    // getOutputStream  instance: args={thiz}
+    public Object hookHttpURLConnectionGetOutputStream(Object[] args) {
+        Object out = backupHttpURLConnectionGetOutputStream != null
+                ? safeInvokeObject(backupHttpURLConnectionGetOutputStream, args[0])
+                : null;
+        if (out instanceof java.io.OutputStream) {
+            CachingOutputStream caching = new CachingOutputStream((java.io.OutputStream) out);
+            connOutStreams.put(System.identityHashCode(args[0]), caching);
+            return caching;
+        }
+        return out;
+    }
+
     // java.net.HttpURLConnection.getResponseCode()  instance: args={thiz}
     public Object hookHttpURLConnectionGetResponseCode(Object[] args) {
         Integer result = null;
@@ -821,9 +877,60 @@ public class HookerBridge {
             Object urlObj = args[0].getClass().getMethod("getURL").invoke(args[0]);
             String url = urlObj != null ? urlObj.toString() : "?";
             String method = (String) args[0].getClass().getMethod("getRequestMethod").invoke(args[0]);
-            logNetwork(method != null ? method : "GET", url, result != null ? result : -1);
+            if (method == null) method = "GET";
+            int code = result != null ? result : -1;
+
+            // Retrieve cached request body (written before this call).
+            int key = System.identityHashCode(args[0]);
+            CachingOutputStream cos = connOutStreams.remove(key);
+            String reqBody = cos != null ? cos.get() : null;
+
+            // Store pending log; completed by getInputStream/getErrorStream.
+            connPending.put(key, new String[]{ url, method, String.valueOf(code), reqBody });
         } catch (Exception ignored) {}
         return result != null ? result : 0;
+    }
+
+    // getInputStream / getErrorStream  instance: args={thiz}
+    public Object hookHttpURLConnectionGetInputStream(Object[] args) {
+        return readConnBody(args[0], backupHttpURLConnectionGetInputStream);
+    }
+    public Object hookHttpURLConnectionGetErrorStream(Object[] args) {
+        return readConnBody(args[0], backupHttpURLConnectionGetErrorStream);
+    }
+
+    private Object readConnBody(Object conn, Method backup) {
+        java.io.InputStream realIs = null;
+        try {
+            realIs = backup != null ? (java.io.InputStream) backup.invoke(conn) : null;
+        } catch (Exception e) { Log.e(TAG, "backup getInputStream failed: " + e); }
+        if (realIs == null) return null;
+
+        try {
+            // Read up to BODY_PREVIEW bytes; return SequenceInputStream so app sees full body.
+            byte[] buf = new byte[BODY_PREVIEW];
+            int total = 0;
+            while (total < BODY_PREVIEW) {
+                int n = realIs.read(buf, total, BODY_PREVIEW - total);
+                if (n < 0) break;
+                total += n;
+            }
+            String respBody = total > 0 ? new String(buf, 0, total, java.nio.charset.StandardCharsets.UTF_8) : null;
+
+            int key = System.identityHashCode(conn);
+            String[] pending = connPending.remove(key);
+            if (pending != null) {
+                int code = -1;
+                try { code = Integer.parseInt(pending[2]); } catch (NumberFormatException ignored) {}
+                logNetworkFull(pending[1], pending[0], code, pending[3], respBody);
+            }
+
+            if (total > 0) {
+                return new java.io.SequenceInputStream(
+                    new java.io.ByteArrayInputStream(buf, 0, total), realIs);
+            }
+        } catch (Exception e) { Log.e(TAG, "readConnBody failed: " + e); }
+        return realIs;
     }
 
     // ---- Phase 6b: SSL Pinning bypass ----

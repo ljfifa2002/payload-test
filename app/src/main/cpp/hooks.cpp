@@ -400,6 +400,26 @@ void install_device_id_hooks(JNIEnv* env) {
         "com/android/okhttp/internal/huc/HttpURLConnectionImpl", "getResponseCode", "()I",
         "hookHttpURLConnectionGetResponseCode", kCbSig, "backupHttpURLConnectionGetResponseCode", false, true);
 
+    // HttpURLConnection body capture:
+    //   getOutputStream — cache request body written before connect()
+    //   getInputStream  — read response body after getResponseCode(), log complete entry
+    //   getErrorStream  — same for 4xx/5xx error responses
+    hook_one(env, hooker_obj, hooker_class,
+        "com/android/okhttp/internal/huc/HttpURLConnectionImpl", "getOutputStream",
+        "()Ljava/io/OutputStream;",
+        "hookHttpURLConnectionGetOutputStream", kCbSig,
+        "backupHttpURLConnectionGetOutputStream", false, true);
+    hook_one(env, hooker_obj, hooker_class,
+        "com/android/okhttp/internal/huc/HttpURLConnectionImpl", "getInputStream",
+        "()Ljava/io/InputStream;",
+        "hookHttpURLConnectionGetInputStream", kCbSig,
+        "backupHttpURLConnectionGetInputStream", false, true);
+    hook_one(env, hooker_obj, hooker_class,
+        "com/android/okhttp/internal/huc/HttpURLConnectionImpl", "getErrorStream",
+        "()Ljava/io/InputStream;",
+        "hookHttpURLConnectionGetErrorStream", kCbSig,
+        "backupHttpURLConnectionGetErrorStream", false, true);
+
     // Phase 6b: SSL Pinning bypass
     // CertificatePinner.check — optional, only if okhttp3 is bundled
     hook_one(env, hooker_obj, hooker_class,
