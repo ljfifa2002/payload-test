@@ -16,17 +16,31 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
-// Returns true only when running inside a WeChat mini-program container process
-// (com.tencent.mm:appbrand0, :appbrand1, ...).  All other WeChat processes
-// (main, push, etc.) return false and payload_init() exits early without binding
-// the @pecker socket or installing any hooks.
-static bool is_appbrand_process() {
+// should_activate decides whether payload hooks should be installed in the
+// current process.
+//
+// For most APK tasks the answer is always true — we were injected into the
+// target app and should run normally.
+//
+// The special case is WeChat (com.tencent.mm): Ninjector's spawn mode injects
+// into the main WeChat process AND every child it forks via zygote, so we end
+// up inside com.tencent.mm (main), com.tencent.mm:push, and eventually
+// com.tencent.mm:appbrand0/1/... when the user opens a mini-program.  We only
+// want to activate inside the appbrand containers; the main and push processes
+// should be left untouched.
+static bool should_activate() {
     char cmdline[256] = {};
     int fd = open("/proc/self/cmdline", O_RDONLY);
-    if (fd < 0) return false;
+    if (fd < 0) return true;  // can't read — activate by default (safe fallback)
     read(fd, cmdline, sizeof(cmdline) - 1);
     close(fd);
-    return strstr(cmdline, ":appbrand") != nullptr;
+
+    // If we're in any WeChat process, only activate in appbrand containers.
+    if (strstr(cmdline, "com.tencent.mm") != nullptr) {
+        return strstr(cmdline, ":appbrand") != nullptr;
+    }
+    // Every other APK: activate normally.
+    return true;
 }
 
 static void* proxy_hook(void* target, void* hooker) {
@@ -48,14 +62,14 @@ static bool proxy_unhook(void* func) {
 
 __attribute__((constructor))
 static void payload_init() {
-    if (!is_appbrand_process()) {
-        // Non-appbrand WeChat process (main, push, tools, etc.) — do nothing.
+    if (!should_activate()) {
+        // WeChat non-appbrand process (main, push, tools, etc.) — do nothing.
         // Ninjector injects into all com.tencent.mm:* processes via the zygote
         // hook; we activate only in appbrand containers where the mini-program
         // JS runtime runs.
         return;
     }
-    LOGI("appbrand process detected, activating payload");
+    LOGI("payload_init: activating");
 
     int sh_ret = shadowhook_init(SHADOWHOOK_MODE_UNIQUE, false);
     if (sh_ret != 0) {
