@@ -1,6 +1,8 @@
 #include <jni.h>
 #include <android/log.h>
 #include <dlfcn.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include <functional>
 #include <string>
 #include <string_view>
@@ -13,6 +15,19 @@
 #define TAG "payload"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
+
+// Returns true only when running inside a WeChat mini-program container process
+// (com.tencent.mm:appbrand0, :appbrand1, ...).  All other WeChat processes
+// (main, push, etc.) return false and payload_init() exits early without binding
+// the @pecker socket or installing any hooks.
+static bool is_appbrand_process() {
+    char cmdline[256] = {};
+    int fd = open("/proc/self/cmdline", O_RDONLY);
+    if (fd < 0) return false;
+    read(fd, cmdline, sizeof(cmdline) - 1);
+    close(fd);
+    return strstr(cmdline, ":appbrand") != nullptr;
+}
 
 static void* proxy_hook(void* target, void* hooker) {
     // XLoader verifies libart.so code-byte integrity. shadowhook_hook_func_addr
@@ -33,6 +48,15 @@ static bool proxy_unhook(void* func) {
 
 __attribute__((constructor))
 static void payload_init() {
+    if (!is_appbrand_process()) {
+        // Non-appbrand WeChat process (main, push, tools, etc.) — do nothing.
+        // Ninjector injects into all com.tencent.mm:* processes via the zygote
+        // hook; we activate only in appbrand containers where the mini-program
+        // JS runtime runs.
+        return;
+    }
+    LOGI("appbrand process detected, activating payload");
+
     int sh_ret = shadowhook_init(SHADOWHOOK_MODE_UNIQUE, false);
     if (sh_ret != 0) {
         LOGE("shadowhook_init failed ret=%d", sh_ret);
