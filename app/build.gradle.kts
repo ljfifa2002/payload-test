@@ -12,6 +12,7 @@ android {
         externalNativeBuild {
             cmake {
                 abiFilters += "arm64-v8a"
+                abiFilters += "armeabi-v7a"
                 arguments(
                     "-DANDROID_STL=c++_static",
                     "-DANDROID_PLATFORM=android-21"

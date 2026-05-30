@@ -24,46 +24,55 @@ jobs:
       - name: Grant Gradle wrapper execute permission
         run: chmod +x gradlew
 
-      - name: Extract LSPlant 6.4 (headers + library before CMake runs)
+      - name: Extract LSPlant 6.4 (headers + libraries for both ABIs)
         run: |
           curl -sL "https://repo1.maven.org/maven2/org/lsposed/lsplant/lsplant-standalone/6.4/lsplant-standalone-6.4.aar" \
             -o /tmp/lsplant6.aar
 
-          # Headers — needed by CMake at configure time
+          # Headers — needed by CMake at configure time (shared across ABIs)
           mkdir -p app/src/main/cpp/lsplant/include
           unzip -p /tmp/lsplant6.aar \
             prefab/modules/lsplant/include/lsplant.hpp \
             > app/src/main/cpp/lsplant/include/lsplant.hpp
 
-          # Library — needed by CMake at link time
+          # arm64-v8a library
           mkdir -p app/src/main/jniLibs/arm64-v8a
           unzip -p /tmp/lsplant6.aar \
             prefab/modules/lsplant/libs/android.arm64-v8a/liblsplant.so \
             > app/src/main/jniLibs/arm64-v8a/liblsplant.so
 
+          # armeabi-v7a library
+          mkdir -p app/src/main/jniLibs/armeabi-v7a
+          unzip -p /tmp/lsplant6.aar \
+            prefab/modules/lsplant/libs/android.armeabi-v7a/liblsplant.so \
+            > app/src/main/jniLibs/armeabi-v7a/liblsplant.so
+
           echo "LSPlant header: $(wc -c < app/src/main/cpp/lsplant/include/lsplant.hpp) bytes"
-          echo "LSPlant .so:    $(wc -c < app/src/main/jniLibs/arm64-v8a/liblsplant.so) bytes"
+          echo "LSPlant arm64: $(wc -c < app/src/main/jniLibs/arm64-v8a/liblsplant.so) bytes"
+          echo "LSPlant arm32: $(wc -c < app/src/main/jniLibs/armeabi-v7a/liblsplant.so) bytes"
 
       - name: Build release
         run: ./gradlew assembleRelease
 
       - name: Collect dependency libs
         run: |
-          mkdir -p app/build/outputs/payload-libs/arm64-v8a
+          for ABI in arm64-v8a armeabi-v7a; do
+            mkdir -p app/build/outputs/payload-libs/$ABI
 
-          # libpayload.so (stripped release)
-          find app/build/intermediates/stripped_native_libs -name "libpayload.so" \
-            -exec cp {} app/build/outputs/payload-libs/arm64-v8a/ \;
+            # libpayload.so (stripped release)
+            find app/build/intermediates/stripped_native_libs -name "libpayload.so" -path "*/$ABI/*" \
+              -exec cp {} app/build/outputs/payload-libs/$ABI/ \;
 
-          # liblsplant.so — already extracted above
-          cp app/src/main/jniLibs/arm64-v8a/liblsplant.so \
-             app/build/outputs/payload-libs/arm64-v8a/liblsplant.so
+            # liblsplant.so — already extracted above
+            cp app/src/main/jniLibs/$ABI/liblsplant.so \
+               app/build/outputs/payload-libs/$ABI/liblsplant.so
 
-          # libshadowhook.so — from Gradle transforms cache
-          find ~/.gradle/caches/transforms-4 -name "libshadowhook.so" -path "*/arm64-v8a/*" \
-            | head -1 | xargs -I{} cp {} app/build/outputs/payload-libs/arm64-v8a/
+            # libshadowhook.so — from Gradle transforms cache
+            find ~/.gradle/caches/transforms-4 -name "libshadowhook.so" -path "*/$ABI/*" \
+              | head -1 | xargs -I{} cp {} app/build/outputs/payload-libs/$ABI/ || true
 
-          ls -la app/build/outputs/payload-libs/arm64-v8a/
+            echo "$ABI: $(ls app/build/outputs/payload-libs/$ABI/)"
+          done
 
       - name: Build hooker.dex
         run: |
@@ -84,14 +93,28 @@ jobs:
                 --lib "$ANDROID_JAR" \
                 $(find /tmp/hooker_classes -name "*.class")
 
-          mv /tmp/hooker_out/classes.dex \
-             app/build/outputs/payload-libs/arm64-v8a/hooker.dex
+          # hooker.dex is architecture-independent — place at top level
+          mv /tmp/hooker_out/classes.dex app/build/outputs/payload-libs/hooker.dex
 
-          ls -la app/build/outputs/payload-libs/arm64-v8a/
+          echo "hooker.dex: $(wc -c < app/build/outputs/payload-libs/hooker.dex) bytes"
 
-      - name: Upload payload libs
+      - name: Upload arm64-v8a payload libs
         uses: actions/upload-artifact@v4
         with:
           name: payload-arm64-v8a
           path: app/build/outputs/payload-libs/arm64-v8a/
+          if-no-files-found: error
+
+      - name: Upload armeabi-v7a payload libs
+        uses: actions/upload-artifact@v4
+        with:
+          name: payload-armeabi-v7a
+          path: app/build/outputs/payload-libs/armeabi-v7a/
+          if-no-files-found: error
+
+      - name: Upload hooker.dex (arch-independent)
+        uses: actions/upload-artifact@v4
+        with:
+          name: payload-common
+          path: app/build/outputs/payload-libs/hooker.dex
           if-no-files-found: error

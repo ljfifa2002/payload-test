@@ -10,7 +10,7 @@ find_package(shadowhook REQUIRED CONFIG)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/lsplant/include)
 add_library(lsplant SHARED IMPORTED)
 set_target_properties(lsplant PROPERTIES
-    IMPORTED_LOCATION ${CMAKE_CURRENT_SOURCE_DIR}/../jniLibs/arm64-v8a/liblsplant.so
+    IMPORTED_LOCATION ${CMAKE_CURRENT_SOURCE_DIR}/../jniLibs/${ANDROID_ABI}/liblsplant.so
 )
 
 add_library(payload SHARED main.cpp hooks.cpp art_hooks.cpp ssl_hooks.cpp)
