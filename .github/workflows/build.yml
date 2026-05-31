@@ -102,8 +102,14 @@ jobs:
 
       - name: Update file timestamps to Shanghai time
         run: |
-          find app/build/outputs/payload-libs -type f | xargs touch
-          echo "Timestamps updated: $(date)"
+          # ZIP stores timestamps as "local time" with no timezone marker.
+          # The CI runner is UTC, so a plain `touch` stores UTC time, which
+          # extractors show as UTC+0. To make extracted files display Beijing
+          # time (UTC+8) on any machine, set mtime = current UTC + 8 h so
+          # the stored "local" value matches what a Beijing clock would show.
+          BEIJING_TS=$(date -u -d '+8 hours' +%Y%m%d%H%M.%S)
+          find app/build/outputs/payload-libs -type f | xargs touch -t "$BEIJING_TS"
+          echo "Timestamps set to: $(date -u -d '+8 hours' '+%Y-%m-%d %H:%M:%S CST')"
 
       - name: Upload arm64-v8a payload libs
         uses: actions/upload-artifact@v4
