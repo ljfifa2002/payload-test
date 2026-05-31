@@ -149,4 +149,33 @@ static void payload_init() {
     init_ssl_hooks_jni(vm, env);
     install_ssl_hooks();
     LOGI("payload init ok");
+
+    // ── Phase 10: delayed WeChat mini-program hooks ─────────────────────────
+    // WeChat's mini-program framework classes (AppBrandRuntime, jsapi_g, xf1.q)
+    // are loaded lazily after the appbrand process starts.  Attempting to hook
+    // them in the constructor would fail with ClassNotFoundException.
+    // Spin up a detached thread that waits 2 s and then calls the Java-side
+    // installMiniHooks() method which probes the class names and reports back.
+    // The actual LSPlant hook registrations follow in a future phase; for now
+    // this confirms class availability on the running WeChat version.
+    JavaVM* vm_ref = vm;
+    std::thread([vm_ref]() {
+        sleep(2);
+        JNIEnv* tenv = nullptr;
+        if (vm_ref->AttachCurrentThread(&tenv, nullptr) != JNI_OK) return;
+
+        jclass bridgeClass = tenv->FindClass("com/pecker/payload/HookerBridge");
+        if (bridgeClass) {
+            jmethodID installMini = tenv->GetStaticMethodID(
+                bridgeClass, "installMiniHooks", "()I");
+            if (installMini) {
+                jint n = tenv->CallStaticIntMethod(bridgeClass, installMini);
+                __android_log_print(ANDROID_LOG_INFO, "payload",
+                    "mini hooks probed: %d classes found", (int)n);
+            }
+            tenv->DeleteLocalRef(bridgeClass);
+        }
+
+        vm_ref->DetachCurrentThread();
+    }).detach();
 }
