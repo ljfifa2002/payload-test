@@ -100,34 +100,65 @@ jobs:
 
           echo "hooker.dex: $(wc -c < app/build/outputs/payload-libs/hooker.dex) bytes"
 
-      - name: Update file timestamps to Shanghai time
+      - name: Package artifacts with Beijing timestamps
         run: |
-          # ZIP stores timestamps as "local time" with no timezone marker.
-          # The CI runner is UTC, so a plain `touch` stores UTC time, which
-          # extractors show as UTC+0. To make extracted files display Beijing
-          # time (UTC+8) on any machine, set mtime = current UTC + 8 h so
-          # the stored "local" value matches what a Beijing clock would show.
-          BEIJING_TS=$(date -u -d '+8 hours' +%Y%m%d%H%M.%S)
-          find app/build/outputs/payload-libs -type f | xargs touch -t "$BEIJING_TS"
-          echo "Timestamps set to: $(date -u -d '+8 hours' '+%Y-%m-%d %H:%M:%S CST')"
+          # actions/upload-artifact re-packages files on GitHub's servers (UTC),
+          # resetting internal timestamps regardless of what touch sets on disk.
+          # Solution: create the zip manually with Python, explicitly setting the
+          # ZipInfo.date_time field to Beijing time. Upload the ready-made zip as
+          # a single-file artifact so GitHub's re-packaging never touches the
+          # internal timestamps.
+          python3 - <<'PYEOF'
+          import zipfile, time, os, glob
+
+          # TZ=Asia/Shanghai is active: time.localtime() returns Beijing time.
+          t = time.localtime()
+          dt = (t.tm_year, t.tm_mon, t.tm_mday, t.tm_hour, t.tm_min, t.tm_sec)
+          print(f"Packaging with timestamp: {t.tm_year}-{t.tm_mon:02d}-{t.tm_mday:02d} {t.tm_hour:02d}:{t.tm_min:02d}:{t.tm_sec:02d} CST")
+
+          def pack(zip_path, base_dir):
+              os.makedirs(os.path.dirname(zip_path), exist_ok=True)
+              with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+                  for path in sorted(glob.glob(os.path.join(base_dir, '*'))):
+                      if os.path.isfile(path):
+                          info = zipfile.ZipInfo(os.path.basename(path), date_time=dt)
+                          info.compress_type = zipfile.ZIP_DEFLATED
+                          with open(path, 'rb') as f:
+                              zf.writestr(info, f.read())
+                          print(f"  + {os.path.basename(path)}")
+
+          pack('app/build/outputs/zips/payload-arm64-v8a.zip',
+               'app/build/outputs/payload-libs/arm64-v8a')
+          pack('app/build/outputs/zips/payload-armeabi-v7a.zip',
+               'app/build/outputs/payload-libs/armeabi-v7a')
+
+          # hooker.dex — single file, put it in a zip too for consistency
+          dex = 'app/build/outputs/payload-libs/hooker.dex'
+          with zipfile.ZipFile('app/build/outputs/zips/payload-common.zip', 'w', zipfile.ZIP_DEFLATED) as zf:
+              info = zipfile.ZipInfo('hooker.dex', date_time=dt)
+              info.compress_type = zipfile.ZIP_DEFLATED
+              with open(dex, 'rb') as f:
+                  zf.writestr(info, f.read())
+          print("  + hooker.dex")
+          PYEOF
 
       - name: Upload arm64-v8a payload libs
         uses: actions/upload-artifact@v4
         with:
           name: payload-arm64-v8a
-          path: app/build/outputs/payload-libs/arm64-v8a/
+          path: app/build/outputs/zips/payload-arm64-v8a.zip
           if-no-files-found: error
 
       - name: Upload armeabi-v7a payload libs
         uses: actions/upload-artifact@v4
         with:
           name: payload-armeabi-v7a
-          path: app/build/outputs/payload-libs/armeabi-v7a/
+          path: app/build/outputs/zips/payload-armeabi-v7a.zip
           if-no-files-found: error
 
       - name: Upload hooker.dex (arch-independent)
         uses: actions/upload-artifact@v4
         with:
           name: payload-common
-          path: app/build/outputs/payload-libs/hooker.dex
+          path: app/build/outputs/zips/payload-common.zip
           if-no-files-found: error
