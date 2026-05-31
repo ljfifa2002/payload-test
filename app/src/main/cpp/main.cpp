@@ -3,6 +3,7 @@
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <thread>
 #include <functional>
 #include <string>
 #include <string_view>
