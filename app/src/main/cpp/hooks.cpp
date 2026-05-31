@@ -196,6 +196,26 @@ static void hook_one(JNIEnv* env,
     check_exception(env, "SetObjectField backup");
 }
 
+// Module-level globals: hooker instance and class kept alive for Phase 10 delayed hooking.
+static jobject g_hooker_obj_global = nullptr;
+static jclass  g_hooker_class_global = nullptr;
+
+// JNI: HookerBridge.hookNative(Object target, Object hooker, Object callback) -> Object (backup)
+// Called from installMiniHooks() on a background thread to register WeChat-specific hooks
+// via LSPlant after WeChat's dex classes are loaded (2 s after injection).
+static jobject JNICALL native_hook_method(JNIEnv* env, jclass /*cls*/,
+                                           jobject target_method,
+                                           jobject hooker_obj,
+                                           jobject callback_method) {
+    if (!target_method || !hooker_obj || !callback_method) {
+        LOGE("hookNative: null argument passed");
+        return nullptr;
+    }
+    jobject backup = lsplant::Hook(env, target_method, hooker_obj, callback_method);
+    if (!backup) LOGE("hookNative: lsplant::Hook returned null");
+    return backup;
+}
+
 void install_device_id_hooks(JNIEnv* env) {
     jclass hooker_class = load_hooker_class(env);
     if (hooker_class == nullptr) {
@@ -209,9 +229,31 @@ void install_device_id_hooks(JNIEnv* env) {
         return;
     }
 
-    // Keep hooker alive for the lifetime of the process
-    jobject hooker_global = env->NewGlobalRef(hooker_obj);
-    (void)hooker_global;
+    // Keep hooker alive for the lifetime of the process.
+    // Also save globals for Phase 10 delayed hook registration.
+    g_hooker_obj_global   = env->NewGlobalRef(hooker_obj);
+    g_hooker_class_global = static_cast<jclass>(env->NewGlobalRef(hooker_class));
+
+    // Set HookerBridge.sInstance so installMiniHooks() can reach the hooker from Java.
+    jfieldID sinst_fid = env->GetStaticFieldID(hooker_class, "sInstance",
+                                                "Lcom/pecker/payload/HookerBridge;");
+    if (!check_exception(env, "GetStaticFieldID sInstance") && sinst_fid) {
+        env->SetStaticObjectField(hooker_class, sinst_fid, hooker_obj);
+        check_exception(env, "SetStaticObjectField sInstance");
+    }
+
+    // Register hookNative so installMiniHooks() can call back into LSPlant.
+    JNINativeMethod mini_native[] = {
+        {"hookNative",
+         "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+         reinterpret_cast<void*>(native_hook_method)}
+    };
+    if (env->RegisterNatives(hooker_class, mini_native, 1) != 0) {
+        check_exception(env, "RegisterNatives hookNative");
+        LOGE("hooks: RegisterNatives hookNative failed");
+    } else {
+        LOGI("hooks: hookNative registered for Phase 10");
+    }
 
     // LSPlant 6.4 always dispatches via ([Ljava/lang/Object;)Ljava/lang/Object;
     // args = [hookerInstance, thiz, param1, param2, ...] for instance methods

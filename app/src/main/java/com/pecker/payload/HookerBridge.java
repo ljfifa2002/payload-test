@@ -194,6 +194,15 @@ public class HookerBridge {
     // For static targets:   args = [param1, param2, ...]
     // 'this' is the HookerBridge instance.
 
+    // Set by install_device_id_hooks() in hooks.cpp so that installMiniHooks() can
+    // reach the hooker object when called from the delayed Phase 10 thread.
+    static HookerBridge sInstance;
+
+    // Bridge into LSPlant from Java: hooks targetMethod via LSPlant and returns
+    // the backup Method.  Implemented in libpayload.so and registered with
+    // RegisterNatives during install_device_id_hooks().
+    static native Object hookNative(Object targetMethod, Object hookerObj, Object callbackMethod);
+
     private String safeInvoke(Method m, Object thiz, Object... params) {
         try { return (String) m.invoke(thiz, params); }
         catch (Exception e) { Log.e(TAG, "backup invoke failed: " + e); return null; }
@@ -590,6 +599,17 @@ public class HookerBridge {
         Object list = backupGetRunningAppProcesses != null
                 ? safeInvokeObject(backupGetRunningAppProcesses, args[0])
                 : null;
+        // xweb (Chromium) and WeChat telemetry/matrix call this for internal process detection,
+        // not as a privacy-sensitive behavior — skip to avoid noise in mini-program tasks.
+        StackTraceElement[] frames = Thread.currentThread().getStackTrace();
+        for (int i = 0; i < Math.min(frames.length, 20); i++) {
+            String c = frames[i].getClassName();
+            if (c.startsWith("com.tencent.xweb")
+                    || c.startsWith("org.chromium")
+                    || c.startsWith("com.tencent.matrix")) {
+                return list;
+            }
+        }
         log("ActivityManager.getRunningAppProcesses", list != null ? "count=" + getListSize(list) : "null");
         return list;
     }
@@ -1289,6 +1309,11 @@ public class HookerBridge {
             catch (Exception ignored) {}
             if (action == null) action = args[1].toString();
         }
+        // WeChat's internal cross-process KV reporting — not a mini-program privacy behavior.
+        if ("com.tencent.mm.plugin.report.service.KVCommCrossProcessReceiver".equals(action)) {
+            if (backupSendBroadcast != null) safeInvokeObject(backupSendBroadcast, args[0], args[1]);
+            return null;
+        }
         log("Context.sendBroadcast", action != null ? action : "");
         if (backupSendBroadcast != null)
             safeInvokeObject(backupSendBroadcast, args[0], args[1]);
@@ -1329,6 +1354,14 @@ public class HookerBridge {
         if (backupContextCompatCheckSelfPermission != null) {
             try { result = (Integer) backupContextCompatCheckSelfPermission.invoke(null, args[0], perm); }
             catch (Exception e) { Log.e(TAG, "backup ContextCompat.checkSelfPermission failed: " + e); }
+        }
+        // Chromium's own service/media initialization checks (ad attribution, BT for audio) are
+        // framework noise inside the xweb process — not meaningful mini-program privacy behaviors.
+        StackTraceElement[] frames = Thread.currentThread().getStackTrace();
+        for (int i = 0; i < Math.min(frames.length, 20); i++) {
+            if (frames[i].getClassName().startsWith("org.chromium")) {
+                return result != null ? result : -1;
+            }
         }
         log("ContextCompat.checkSelfPermission", perm);
         return result != null ? result : -1;
@@ -1470,62 +1503,128 @@ public class HookerBridge {
     // String[]: {url, method, body}
 
     /**
-     * Install WeChat mini-program specific hooks via LSPlant reflection.
-     * Called once from a background thread in payload_init() with a delay so that
+     * Install WeChat mini-program specific hooks via LSPlant.
+     * Called once from a background thread in payload_init() with a 2 s delay so that
      * WeChat's dex classes are loaded before we attempt to hook them.
      * Each hook target is wrapped in its own try/catch — partial failure is acceptable.
      *
      * @return number of hooks successfully installed
      */
     public static int installMiniHooks() {
+        HookerBridge inst = sInstance;
+        if (inst == null) {
+            Log.w(TAG, "mini_hooks: sInstance null, skipping");
+            return 0;
+        }
         int installed = 0;
 
         // ── AppBrandRuntime.m0 → mini_launch ────────────────────────────────
         try {
-            Class<?> runtimeCls = Class.forName(
-                "com.tencent.mm.plugin.appbrand.AppBrandRuntime");
-            Class<?> configCls = Class.forName(
-                "com.tencent.mm.plugin.appbrand.config.AppBrandInitConfig");
-            Class<?> configWCCls = Class.forName(
-                "com.tencent.mm.plugin.appbrand.config.AppBrandInitConfigWC");
-            Class<?> configLUCls = Class.forName(
-                "com.tencent.luggage.sdk.config.AppBrandInitConfigLU");
-            java.lang.reflect.Method m0 = runtimeCls.getDeclaredMethod("m0", configCls);
-            m0.setAccessible(true);
-
-            // Use a Proxy to intercept the call (Java-only fallback, no LSPlant needed
-            // for this hook since we wrap the original via reflection).
-            // We store original reference and call it; on each invocation we extract
-            // fields from the config object and emit mini_launch.
-            final java.lang.reflect.Method[] origHolder = {m0};
-            // Register via the existing LSPlant channel is complex from pure Java;
-            // instead we patch the method using our hook infrastructure indirectly.
-            // For now emit a log confirming the class exists for this WeChat version.
-            Log.i(TAG, "mini_hooks: AppBrandRuntime.m0 found → mini_launch hook ready");
-            installed++;
+            Class<?> runtimeCls = Class.forName("com.tencent.mm.plugin.appbrand.AppBrandRuntime");
+            java.lang.reflect.Method target = null;
+            for (java.lang.reflect.Method m : runtimeCls.getDeclaredMethods()) {
+                if ("m0".equals(m.getName()) && m.getParameterTypes().length == 1) {
+                    target = m;
+                    break;
+                }
+            }
+            if (target != null) {
+                target.setAccessible(true);
+                java.lang.reflect.Method cb = HookerBridge.class.getDeclaredMethod(
+                        "hookAppBrandRuntimeM0", Object[].class);
+                Object backup = hookNative(target, inst, cb);
+                if (backup instanceof java.lang.reflect.Method) {
+                    inst.backupAppBrandRuntimeM0 = (java.lang.reflect.Method) backup;
+                    installed++;
+                    Log.i(TAG, "mini_hooks: AppBrandRuntime.m0 hooked → mini_launch");
+                } else {
+                    Log.w(TAG, "mini_hooks: AppBrandRuntime.m0 hookNative returned null");
+                }
+            } else {
+                Log.w(TAG, "mini_hooks: AppBrandRuntime.m0 method not found");
+            }
         } catch (Exception e) {
-            Log.w(TAG, "mini_hooks: AppBrandRuntime.m0 not found: " + e.getMessage());
+            Log.w(TAG, "mini_hooks: AppBrandRuntime.m0 failed: " + e);
         }
 
-        // ── jsapi_g.q0 → mini_call_api ──────────────────────────────────────
+        // ── jsapi.m.r0 → mini_call_api ──────────────────────────────────────
+        // r0 is the per-API dispatch handler; we look for the overload with >= 6 params
+        // since the exact signature changes across WeChat versions.
         try {
             Class<?> jsapiCls = Class.forName("com.tencent.mm.plugin.appbrand.jsapi.m");
-            // The actual hook needs LSPlant; verify the class exists for this version.
-            Log.i(TAG, "mini_hooks: jsapi.m (jsapi_g) found → mini_call_api hook ready");
-            installed++;
+            java.lang.reflect.Method target = null;
+            for (java.lang.reflect.Method m : jsapiCls.getDeclaredMethods()) {
+                if ("r0".equals(m.getName()) && m.getParameterTypes().length >= 6) {
+                    target = m;
+                    break;
+                }
+            }
+            if (target != null) {
+                target.setAccessible(true);
+                java.lang.reflect.Method cb = HookerBridge.class.getDeclaredMethod(
+                        "hookJsapiQ0", Object[].class);
+                Object backup = hookNative(target, inst, cb);
+                if (backup instanceof java.lang.reflect.Method) {
+                    inst.backupJsapiQ0 = (java.lang.reflect.Method) backup;
+                    installed++;
+                    Log.i(TAG, "mini_hooks: jsapi.m.r0 hooked → mini_call_api");
+                } else {
+                    Log.w(TAG, "mini_hooks: jsapi.m.r0 hookNative returned null");
+                }
+            } else {
+                Log.w(TAG, "mini_hooks: jsapi.m.r0 method not found");
+            }
         } catch (Exception e) {
-            Log.w(TAG, "mini_hooks: jsapi.m not found: " + e.getMessage());
+            Log.w(TAG, "mini_hooks: jsapi.m.r0 failed: " + e);
         }
 
-        // ── xf1.q → mini_request ────────────────────────────────────────────
+        // ── xf1.q.q / xf1.q.d → mini_request ──────────────────────────────
+        // q: outgoing request (8 declared params including task-id + api-name)
+        // d: response callback (9 declared params including status-code + body)
         try {
             Class<?> xf1q = Class.forName("xf1.q");
-            Log.i(TAG, "mini_hooks: xf1.q found → mini_request hook ready");
-            installed++;
+            java.lang.reflect.Method targetQ = null;
+            java.lang.reflect.Method targetD = null;
+            for (java.lang.reflect.Method m : xf1q.getDeclaredMethods()) {
+                int pc = m.getParameterTypes().length;
+                if ("q".equals(m.getName()) && pc == 8 && targetQ == null) targetQ = m;
+                else if ("d".equals(m.getName()) && pc == 9 && targetD == null) targetD = m;
+            }
+            if (targetQ != null) {
+                targetQ.setAccessible(true);
+                java.lang.reflect.Method cb = HookerBridge.class.getDeclaredMethod(
+                        "hookXf1QQ", Object[].class);
+                Object backup = hookNative(targetQ, inst, cb);
+                if (backup instanceof java.lang.reflect.Method) {
+                    inst.backupXf1QQ = (java.lang.reflect.Method) backup;
+                    installed++;
+                    Log.i(TAG, "mini_hooks: xf1.q.q hooked → mini_request send");
+                } else {
+                    Log.w(TAG, "mini_hooks: xf1.q.q hookNative returned null");
+                }
+            } else {
+                Log.w(TAG, "mini_hooks: xf1.q.q (8 params) not found");
+            }
+            if (targetD != null) {
+                targetD.setAccessible(true);
+                java.lang.reflect.Method cb = HookerBridge.class.getDeclaredMethod(
+                        "hookXf1QD", Object[].class);
+                Object backup = hookNative(targetD, inst, cb);
+                if (backup instanceof java.lang.reflect.Method) {
+                    inst.backupXf1QD = (java.lang.reflect.Method) backup;
+                    installed++;
+                    Log.i(TAG, "mini_hooks: xf1.q.d hooked → mini_request recv");
+                } else {
+                    Log.w(TAG, "mini_hooks: xf1.q.d hookNative returned null");
+                }
+            } else {
+                Log.w(TAG, "mini_hooks: xf1.q.d (9 params) not found");
+            }
         } catch (Exception e) {
-            Log.w(TAG, "mini_hooks: xf1.q not found: " + e.getMessage());
+            Log.w(TAG, "mini_hooks: xf1.q failed: " + e);
         }
 
+        Log.i(TAG, "mini_hooks: installed=" + installed);
         return installed;
     }
 
