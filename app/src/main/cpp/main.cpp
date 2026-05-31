@@ -151,32 +151,41 @@ static void payload_init() {
     install_ssl_hooks();
     LOGI("payload init ok");
 
-    // ── Phase 10: delayed WeChat mini-program hooks ─────────────────────────
-    // WeChat's mini-program framework classes (AppBrandRuntime, jsapi_g, xf1.q)
-    // are loaded lazily after the appbrand process starts.  Attempting to hook
-    // them in the constructor would fail with ClassNotFoundException.
-    // Spin up a detached thread that waits 2 s and then calls the Java-side
-    // installMiniHooks() method which probes the class names and reports back.
-    // The actual LSPlant hook registrations follow in a future phase; for now
-    // this confirms class availability on the running WeChat version.
-    JavaVM* vm_ref = vm;
-    std::thread([vm_ref]() {
-        sleep(2);
-        JNIEnv* tenv = nullptr;
-        if (vm_ref->AttachCurrentThread(&tenv, nullptr) != JNI_OK) return;
+    // ── Phase 10: delayed WeChat mini-program hooks (appbrand only) ────────
+    // WeChat's mini-program framework classes are loaded lazily after the
+    // appbrand process starts.  This thread is ONLY started when we are in
+    // a com.tencent.mm:appbrand* process — APK processes must NOT run it
+    // because FindClass would fail (ClassNotFoundException), and calling
+    // DetachCurrentThread with a pending JNI exception crashes the process.
+    const char* process_name = getenv("NCORE_PROCESS_NAME");
+    bool in_appbrand = (process_name != nullptr)
+                    && (strstr(process_name, ":appbrand") != nullptr);
+    if (in_appbrand) {
+        JavaVM* vm_ref = vm;
+        std::thread([vm_ref]() {
+            sleep(2);
+            JNIEnv* tenv = nullptr;
+            if (vm_ref->AttachCurrentThread(&tenv, nullptr) != JNI_OK) return;
 
-        jclass bridgeClass = tenv->FindClass("com/pecker/payload/HookerBridge");
-        if (bridgeClass) {
-            jmethodID installMini = tenv->GetStaticMethodID(
-                bridgeClass, "installMiniHooks", "()I");
-            if (installMini) {
-                jint n = tenv->CallStaticIntMethod(bridgeClass, installMini);
-                __android_log_print(ANDROID_LOG_INFO, "payload",
-                    "mini hooks probed: %d classes found", (int)n);
+            // Always clear any pending exception before DetachCurrentThread.
+            jclass bridgeClass = tenv->FindClass("com/pecker/payload/HookerBridge");
+            if (tenv->ExceptionCheck()) tenv->ExceptionClear();
+
+            if (bridgeClass) {
+                jmethodID installMini = tenv->GetStaticMethodID(
+                    bridgeClass, "installMiniHooks", "()I");
+                if (tenv->ExceptionCheck()) tenv->ExceptionClear();
+
+                if (installMini) {
+                    jint n = tenv->CallStaticIntMethod(bridgeClass, installMini);
+                    if (tenv->ExceptionCheck()) tenv->ExceptionClear();
+                    __android_log_print(ANDROID_LOG_INFO, "payload",
+                        "mini hooks probed: %d classes found", (int)n);
+                }
+                tenv->DeleteLocalRef(bridgeClass);
             }
-            tenv->DeleteLocalRef(bridgeClass);
-        }
 
-        vm_ref->DetachCurrentThread();
-    }).detach();
+            vm_ref->DetachCurrentThread();
+        }).detach();
+    }
 }
