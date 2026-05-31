@@ -28,18 +28,43 @@
 // com.tencent.mm:appbrand0/1/... when the user opens a mini-program.  We only
 // want to activate inside the appbrand containers; the main and push processes
 // should be left untouched.
+//
+// Detection strategy (two layers):
+//
+// Layer 1 — env var NCORE_PROCESS_NAME (reliable, early):
+//   ncore sets this env variable to the exact sub-process name just before
+//   calling dlopen(payload.so).  This is set from selinux_android_setcontext,
+//   which fires before android_os_Process_setArgV0, so /proc/self/cmdline has
+//   not been updated yet at constructor time.  The env var is the only reliable
+//   source of the final process name at this stage.
+//
+// Layer 2 — /proc/self/cmdline (fallback, post-specialisation):
+//   If the env var is absent (e.g. payload loaded by a different injector),
+//   fall back to reading /proc/self/cmdline.  By the time Java class loading
+//   happens this is already correct, but in the C++ constructor it may still
+//   show "zygote64" — use it only as a best-effort guard.
 static bool should_activate() {
+    // Layer 1: env var set by ncore before dlopen — most reliable.
+    const char* env_name = getenv("NCORE_PROCESS_NAME");
+    if (env_name != nullptr && env_name[0] != '\0') {
+        if (strstr(env_name, "com.tencent.mm") != nullptr) {
+            // Inside a WeChat process: only activate in appbrand containers.
+            return strstr(env_name, ":appbrand") != nullptr;
+        }
+        // Any other package: activate normally.
+        return true;
+    }
+
+    // Layer 2: /proc/self/cmdline fallback (may still be "zygote64" in C++ ctor).
     char cmdline[256] = {};
     int fd = open("/proc/self/cmdline", O_RDONLY);
-    if (fd < 0) return true;  // can't read — activate by default (safe fallback)
+    if (fd < 0) return true;
     read(fd, cmdline, sizeof(cmdline) - 1);
     close(fd);
 
-    // If we're in any WeChat process, only activate in appbrand containers.
     if (strstr(cmdline, "com.tencent.mm") != nullptr) {
         return strstr(cmdline, ":appbrand") != nullptr;
     }
-    // Every other APK: activate normally.
     return true;
 }
 

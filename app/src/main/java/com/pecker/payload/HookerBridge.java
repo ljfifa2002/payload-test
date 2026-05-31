@@ -16,32 +16,82 @@ public class HookerBridge {
     // connect as soon as adb forward is set up — no retry delay needed.
     //
     // adb forward equivalent: adb forward tcp:PORT localabstract:pecker
+    //
+    // Layer-2 process filter (Java side):
+    // By the time this static initializer runs, android_os_Process_setArgV0
+    // has already executed and ActivityThread.currentProcessName() returns the
+    // correct final process name.  For WeChat mini-program support, Ninjector
+    // injects payload into all com.tencent.mm:* sub-processes via the zygote
+    // hook, but we must only bind the socket in appbrand containers.
     private static final class SocketChannel {
         private static final String SOCKET_NAME = "pecker";
         private static volatile OutputStream activeOut = null;
         private static final Object LOCK = new Object();
 
         static {
-            Thread t = new Thread(() -> {
-                try (LocalServerSocket srv = new LocalServerSocket(SOCKET_NAME)) {
-                    Log.i(TAG, "socket_channel: listening @" + SOCKET_NAME);
-                    while (true) {
-                        LocalSocket conn = srv.accept();
-                        Log.i(TAG, "socket_channel: client connected");
-                        synchronized (LOCK) { activeOut = conn.getOutputStream(); }
-                        // Block until client closes — signals task end.
-                        try { conn.getInputStream().read(); } catch (Exception ignored) {}
-                        synchronized (LOCK) {
-                            if (activeOut == conn.getOutputStream()) activeOut = null;
+            // Java-layer process name guard (Method B / Layer 2).
+            // Works reliably here because class loading happens after
+            // android_os_Process_setArgV0 updates the process name.
+            // The C++ constructor's env-var check (Layer 1) handles the early
+            // gate; this is a belt-and-suspenders safety net.
+            String procName = currentProcessName();
+            if (procName != null
+                    && procName.startsWith("com.tencent.mm")
+                    && !procName.contains(":appbrand")) {
+                // WeChat non-appbrand process (main, push, sandbox, etc.) —
+                // do not bind the socket; leave data collection to the appbrand
+                // container that will be forked when the user opens a mini-program.
+                Log.i(TAG, "socket_channel: skipping non-appbrand WeChat process: " + procName);
+                // Static initializer exits without starting the server thread.
+                // send() will be a no-op because activeOut stays null.
+            } else {
+                Thread t = new Thread(() -> {
+                    try (LocalServerSocket srv = new LocalServerSocket(SOCKET_NAME)) {
+                        Log.i(TAG, "socket_channel: listening @" + SOCKET_NAME
+                                + (procName != null ? " proc=" + procName : ""));
+                        while (true) {
+                            LocalSocket conn = srv.accept();
+                            Log.i(TAG, "socket_channel: client connected");
+                            synchronized (LOCK) { activeOut = conn.getOutputStream(); }
+                            // Block until client closes — signals task end.
+                            try { conn.getInputStream().read(); } catch (Exception ignored) {}
+                            synchronized (LOCK) {
+                                if (activeOut == conn.getOutputStream()) activeOut = null;
+                            }
+                            Log.i(TAG, "socket_channel: client disconnected");
                         }
-                        Log.i(TAG, "socket_channel: client disconnected");
+                    } catch (Exception e) {
+                        Log.e(TAG, "socket_channel: fatal: " + e);
                     }
-                } catch (Exception e) {
-                    Log.e(TAG, "socket_channel: fatal: " + e);
+                }, "pecker-socket");
+                t.setDaemon(true);
+                t.start();
+            }
+        }
+
+        // Returns the current process name using ActivityThread, falling back to
+        // reading /proc/self/cmdline if the reflection call fails.
+        private static String currentProcessName() {
+            try {
+                Class<?> at = Class.forName("android.app.ActivityThread");
+                Method m = at.getDeclaredMethod("currentProcessName");
+                m.setAccessible(true);
+                return (String) m.invoke(null);
+            } catch (Exception ignored) {}
+            // Fallback: /proc/self/cmdline (null-terminated, may have trailing nulls)
+            try {
+                java.io.RandomAccessFile f = new java.io.RandomAccessFile("/proc/self/cmdline", "r");
+                byte[] buf = new byte[256];
+                int n = f.read(buf);
+                f.close();
+                if (n > 0) {
+                    // cmdline is null-terminated; trim trailing null bytes
+                    int end = 0;
+                    while (end < n && buf[end] != 0) end++;
+                    return new String(buf, 0, end, StandardCharsets.UTF_8);
                 }
-            }, "pecker-socket");
-            t.setDaemon(true);
-            t.start();
+            } catch (Exception ignored) {}
+            return null;
         }
 
         static void send(String line) {
