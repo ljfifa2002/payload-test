@@ -19,7 +19,7 @@
 
 // Bumped on every pushed commit so logcat immediately reveals which binary is deployed.
 // Format: YYYY.MM.DD-<short-hash>
-#define PAYLOAD_VERSION "2026.06.01-phase10fix"
+#define PAYLOAD_VERSION "2026.06.01-classloader-fix"
 
 // should_activate decides whether payload hooks should be installed in the
 // current process.
@@ -190,32 +190,31 @@ static void payload_init() {
             }
             if (!in_appbrand) return;
 
+            // Use cached class and method ID from install_device_id_hooks() — those
+            // were resolved on the app thread which has the InMemoryDexClassLoader
+            // context. FindClass / GetStaticMethodID on a bare AttachCurrentThread
+            // thread uses the system ClassLoader and cannot find HookerBridge.
+            jclass    bridgeClass  = g_hooker_class_global;
+            jmethodID installMini  = g_install_mini_method;
+            if (!bridgeClass || !installMini) {
+                __android_log_print(ANDROID_LOG_ERROR, "payload",
+                    "mini hooks: cached class/method null, skipping");
+                return;
+            }
+
             JNIEnv* tenv = nullptr;
             if (vm_ref->AttachCurrentThread(&tenv, nullptr) != JNI_OK) return;
 
-            jclass bridgeClass = tenv->FindClass("com/pecker/payload/HookerBridge");
-            if (tenv->ExceptionCheck()) tenv->ExceptionClear();
-
-            jmethodID installMini = nullptr;
-            if (bridgeClass) {
-                installMini = tenv->GetStaticMethodID(
-                    bridgeClass, "installMiniHooks", "()I");
+            // Retry every 2 s until hooks install or 60 s elapses (30 attempts).
+            for (int attempt = 1; attempt <= 30; attempt++) {
+                jint n = tenv->CallStaticIntMethod(bridgeClass, installMini);
                 if (tenv->ExceptionCheck()) tenv->ExceptionClear();
+                __android_log_print(ANDROID_LOG_INFO, "payload",
+                    "mini hooks attempt %d: installed=%d", attempt, (int)n);
+                if (n > 0) break;
+                sleep(2);
             }
 
-            if (installMini) {
-                // Retry every 2 s until hooks install or 60 s elapses (30 attempts).
-                for (int attempt = 1; attempt <= 30; attempt++) {
-                    jint n = tenv->CallStaticIntMethod(bridgeClass, installMini);
-                    if (tenv->ExceptionCheck()) tenv->ExceptionClear();
-                    __android_log_print(ANDROID_LOG_INFO, "payload",
-                        "mini hooks attempt %d: installed=%d", attempt, (int)n);
-                    if (n > 0) break;
-                    sleep(2);
-                }
-            }
-
-            if (bridgeClass) tenv->DeleteLocalRef(bridgeClass);
             vm_ref->DetachCurrentThread();
         }).detach();
     }

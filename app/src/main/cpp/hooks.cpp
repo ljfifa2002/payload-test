@@ -197,8 +197,11 @@ static void hook_one(JNIEnv* env,
 }
 
 // Module-level globals: hooker instance and class kept alive for Phase 10 delayed hooking.
-static jobject g_hooker_obj_global = nullptr;
-static jclass  g_hooker_class_global = nullptr;
+// Declared extern in hooks.h so main.cpp's Phase 10 thread can use them directly
+// instead of calling FindClass on a bare native thread (wrong ClassLoader).
+static jobject   g_hooker_obj_global    = nullptr;
+jclass           g_hooker_class_global  = nullptr;
+jmethodID        g_install_mini_method  = nullptr;
 
 // JNI: HookerBridge.hookNative(Object target, Object hooker, Object callback) -> Object (backup)
 // Called from installMiniHooks() on a background thread to register WeChat-specific hooks
@@ -253,6 +256,19 @@ void install_device_id_hooks(JNIEnv* env) {
         LOGE("hooks: RegisterNatives hookNative failed");
     } else {
         LOGI("hooks: hookNative registered for Phase 10");
+        // Cache installMiniHooks() method ID while we are on the app thread
+        // (correct InMemoryDexClassLoader context). The Phase 10 thread in
+        // main.cpp must use this cached ID instead of calling GetStaticMethodID
+        // on an AttachCurrentThread context, which would fail the same way.
+        g_install_mini_method = env->GetStaticMethodID(
+            g_hooker_class_global, "installMiniHooks", "()I");
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            g_install_mini_method = nullptr;
+            LOGE("hooks: GetStaticMethodID installMiniHooks failed");
+        } else {
+            LOGI("hooks: installMiniHooks method ID cached for Phase 10");
+        }
     }
 
     // LSPlant 6.4 always dispatches via ([Ljava/lang/Object;)Ljava/lang/Object;
