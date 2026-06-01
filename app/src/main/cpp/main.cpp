@@ -19,7 +19,7 @@
 
 // Bumped on every pushed commit so logcat immediately reveals which binary is deployed.
 // Format: YYYY.MM.DD-<short-hash>
-#define PAYLOAD_VERSION "2026.06.01-c343cb3"
+#define PAYLOAD_VERSION "2026.06.01-phase10fix"
 
 // should_activate decides whether payload hooks should be installed in the
 // current process.
@@ -155,40 +155,41 @@ static void payload_init() {
     install_ssl_hooks();
     LOGI("payload init ok");
 
-    // ── Phase 10: delayed WeChat mini-program hooks (appbrand only) ────────
+    // ── Phase 10: delayed WeChat mini-program hooks ───────────────────────────
     // WeChat's mini-program framework classes (AppBrandRuntime, jsapi.m, xf1.q)
-    // are loaded lazily — only when the user actually opens a mini-program, which
-    // can be 10-30 s after the appbrand process starts.  A single sleep(2) fires
-    // too early and gets ClassNotFoundException for all three targets.
+    // are loaded lazily — only when the user actually opens a mini-program.
     //
-    // Strategy: retry every 2 s, up to 60 s total (30 attempts), stopping as
-    // soon as installMiniHooks() returns > 0 (at least one hook installed).
-    // This thread is ONLY started in appbrand processes.
-    //
-    // in_appbrand detection uses the same two-layer strategy as should_activate():
-    //   Layer 1: NCORE_PROCESS_NAME env var (set by ncore ≥ 57a1c96 before dlopen)
-    //   Layer 2: /proc/self/cmdline fallback (works on any ncore version)
-    bool in_appbrand = false;
+    // The appbrand check CANNOT be done here in the constructor: dlopen fires
+    // inside selinux_android_setcontext, before android_os_Process_setArgV0
+    // runs.  At this moment /proc/self/cmdline still shows "zygote64" regardless
+    // of the final process name, and NCORE_PROCESS_NAME is only set by ncore ≥
+    // commit 57a1c96.  Deferring the check to the thread body (post-sleep) is
+    // the only reliable approach across all ncore versions.
     {
-        const char* env_name = getenv("NCORE_PROCESS_NAME");
-        if (env_name != nullptr && env_name[0] != '\0') {
-            in_appbrand = strstr(env_name, ":appbrand") != nullptr;
-        } else {
-            // Fallback: read process name from cmdline.
-            // At this point (payload_init constructor) android_os_Process_setArgV0
-            // has already run for appbrand children, so cmdline is reliable here.
-            char cmdline[256] = {};
-            int fd = open("/proc/self/cmdline", O_RDONLY);
-            if (fd >= 0) {
-                read(fd, cmdline, sizeof(cmdline) - 1);
-                close(fd);
-                in_appbrand = strstr(cmdline, ":appbrand") != nullptr;
-            }
-        }
-    }
-    if (in_appbrand) {
         JavaVM* vm_ref = vm;
         std::thread([vm_ref]() {
+            // Sleep first so android_os_Process_setArgV0 completes and
+            // /proc/self/cmdline reflects the actual process name.
+            sleep(2);
+
+            // Exit early if not running in an appbrand container.
+            bool in_appbrand = false;
+            {
+                const char* env_name = getenv("NCORE_PROCESS_NAME");
+                if (env_name != nullptr && env_name[0] != '\0') {
+                    in_appbrand = strstr(env_name, ":appbrand") != nullptr;
+                } else {
+                    char cmdline[256] = {};
+                    int fd = open("/proc/self/cmdline", O_RDONLY);
+                    if (fd >= 0) {
+                        read(fd, cmdline, sizeof(cmdline) - 1);
+                        close(fd);
+                        in_appbrand = strstr(cmdline, ":appbrand") != nullptr;
+                    }
+                }
+            }
+            if (!in_appbrand) return;
+
             JNIEnv* tenv = nullptr;
             if (vm_ref->AttachCurrentThread(&tenv, nullptr) != JNI_OK) return;
 
@@ -203,14 +204,14 @@ static void payload_init() {
             }
 
             if (installMini) {
-                // Retry every 2 s until hooks install or 60 s elapses.
+                // Retry every 2 s until hooks install or 60 s elapses (30 attempts).
                 for (int attempt = 1; attempt <= 30; attempt++) {
-                    sleep(2);
                     jint n = tenv->CallStaticIntMethod(bridgeClass, installMini);
                     if (tenv->ExceptionCheck()) tenv->ExceptionClear();
                     __android_log_print(ANDROID_LOG_INFO, "payload",
                         "mini hooks attempt %d: installed=%d", attempt, (int)n);
-                    if (n > 0) break;  // at least one hook registered — done
+                    if (n > 0) break;
+                    sleep(2);
                 }
             }
 
