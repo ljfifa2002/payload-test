@@ -152,39 +152,46 @@ static void payload_init() {
     LOGI("payload init ok");
 
     // ── Phase 10: delayed WeChat mini-program hooks (appbrand only) ────────
-    // WeChat's mini-program framework classes are loaded lazily after the
-    // appbrand process starts.  This thread is ONLY started when we are in
-    // a com.tencent.mm:appbrand* process — APK processes must NOT run it
-    // because FindClass would fail (ClassNotFoundException), and calling
-    // DetachCurrentThread with a pending JNI exception crashes the process.
+    // WeChat's mini-program framework classes (AppBrandRuntime, jsapi.m, xf1.q)
+    // are loaded lazily — only when the user actually opens a mini-program, which
+    // can be 10-30 s after the appbrand process starts.  A single sleep(2) fires
+    // too early and gets ClassNotFoundException for all three targets.
+    //
+    // Strategy: retry every 2 s, up to 30 s total (15 attempts), stopping as
+    // soon as installMiniHooks() returns > 0 (at least one hook installed).
+    // This thread is ONLY started in appbrand processes.
     const char* process_name = getenv("NCORE_PROCESS_NAME");
     bool in_appbrand = (process_name != nullptr)
                     && (strstr(process_name, ":appbrand") != nullptr);
     if (in_appbrand) {
         JavaVM* vm_ref = vm;
         std::thread([vm_ref]() {
-            sleep(2);
             JNIEnv* tenv = nullptr;
             if (vm_ref->AttachCurrentThread(&tenv, nullptr) != JNI_OK) return;
 
-            // Always clear any pending exception before DetachCurrentThread.
             jclass bridgeClass = tenv->FindClass("com/pecker/payload/HookerBridge");
             if (tenv->ExceptionCheck()) tenv->ExceptionClear();
 
+            jmethodID installMini = nullptr;
             if (bridgeClass) {
-                jmethodID installMini = tenv->GetStaticMethodID(
+                installMini = tenv->GetStaticMethodID(
                     bridgeClass, "installMiniHooks", "()I");
                 if (tenv->ExceptionCheck()) tenv->ExceptionClear();
+            }
 
-                if (installMini) {
+            if (installMini) {
+                // Retry every 2 s until hooks install or 30 s elapses.
+                for (int attempt = 1; attempt <= 15; attempt++) {
+                    sleep(2);
                     jint n = tenv->CallStaticIntMethod(bridgeClass, installMini);
                     if (tenv->ExceptionCheck()) tenv->ExceptionClear();
                     __android_log_print(ANDROID_LOG_INFO, "payload",
-                        "mini hooks probed: %d classes found", (int)n);
+                        "mini hooks attempt %d: installed=%d", attempt, (int)n);
+                    if (n > 0) break;  // at least one hook registered — done
                 }
-                tenv->DeleteLocalRef(bridgeClass);
             }
 
+            if (bridgeClass) tenv->DeleteLocalRef(bridgeClass);
             vm_ref->DetachCurrentThread();
         }).detach();
     }
