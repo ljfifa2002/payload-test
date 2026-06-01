@@ -1530,12 +1530,20 @@ public class HookerBridge {
         }
         int installed = 0;
 
-        // ── AppBrandRuntime.m0 → mini_launch ────────────────────────────────
+        // ── AppBrandRuntime.i → mini_launch ─────────────────────────────────
+        // Callstack evidence (WeChat 8.0.71): AppBrandRuntime.i:48 is the
+        // mini-program launch entry point. Earlier analysis mistakenly
+        // targeted m0 which does not exist in this version.
+        // We search for any method named "i" with exactly 1 parameter in
+        // AppBrandRuntime; if multiple overloads exist we take the first one
+        // whose single parameter is NOT a primitive (it should be an
+        // AppBrandInitConfig subclass).
         try {
             Class<?> runtimeCls = Class.forName("com.tencent.mm.plugin.appbrand.AppBrandRuntime");
             java.lang.reflect.Method target = null;
             for (java.lang.reflect.Method m : runtimeCls.getDeclaredMethods()) {
-                if ("m0".equals(m.getName()) && m.getParameterTypes().length == 1) {
+                if ("i".equals(m.getName()) && m.getParameterTypes().length == 1
+                        && !m.getParameterTypes()[0].isPrimitive()) {
                     target = m;
                     break;
                 }
@@ -1548,25 +1556,36 @@ public class HookerBridge {
                 if (backup instanceof java.lang.reflect.Method) {
                     inst.backupAppBrandRuntimeM0 = (java.lang.reflect.Method) backup;
                     installed++;
-                    Log.i(TAG, "mini_hooks: AppBrandRuntime.m0 hooked → mini_launch");
+                    Log.i(TAG, "mini_hooks: AppBrandRuntime.i hooked → mini_launch");
                 } else {
-                    Log.w(TAG, "mini_hooks: AppBrandRuntime.m0 hookNative returned null");
+                    Log.w(TAG, "mini_hooks: AppBrandRuntime.i hookNative returned null");
                 }
             } else {
-                Log.w(TAG, "mini_hooks: AppBrandRuntime.m0 method not found");
+                // Dump all method names to help diagnose future version changes
+                java.lang.reflect.Method[] all = runtimeCls.getDeclaredMethods();
+                StringBuilder sb = new StringBuilder("mini_hooks: AppBrandRuntime methods: ");
+                for (java.lang.reflect.Method m : all) sb.append(m.getName()).append('(').append(m.getParameterTypes().length).append(") ");
+                Log.w(TAG, sb.toString());
             }
         } catch (Exception e) {
-            Log.w(TAG, "mini_hooks: AppBrandRuntime.m0 failed: " + e);
+            Log.w(TAG, "mini_hooks: AppBrandRuntime.i failed: " + e);
         }
 
-        // ── jsapi.m.r0 → mini_call_api ──────────────────────────────────────
-        // r0 is the per-API dispatch handler; we look for the overload with >= 6 params
-        // since the exact signature changes across WeChat versions.
+        // ── jsapi.m.q0 → mini_call_api ──────────────────────────────────────
+        // Callstack evidence (WeChat 8.0.71):
+        //   jsapi.m.q0:248/329  ← top-level API queue entry, called for EVERY wx.* call
+        //   jsapi.m.o0:77       ← internal dispatcher
+        //   jsapi.q.a:188       ← executor
+        //   jsapi.m.r0:76/23    ← per-API handler (only some APIs, NOT the right target)
+        //
+        // Hooking q0 captures all wx.* API calls.  r0 was wrong: it is a per-API
+        // handler and only fires for the subset of APIs that check permissions.
+        // q0 has >= 2 params (apiName + data at minimum).
         try {
             Class<?> jsapiCls = Class.forName("com.tencent.mm.plugin.appbrand.jsapi.m");
             java.lang.reflect.Method target = null;
             for (java.lang.reflect.Method m : jsapiCls.getDeclaredMethods()) {
-                if ("r0".equals(m.getName()) && m.getParameterTypes().length >= 6) {
+                if ("q0".equals(m.getName()) && m.getParameterTypes().length >= 2) {
                     target = m;
                     break;
                 }
@@ -1579,15 +1598,20 @@ public class HookerBridge {
                 if (backup instanceof java.lang.reflect.Method) {
                     inst.backupJsapiQ0 = (java.lang.reflect.Method) backup;
                     installed++;
-                    Log.i(TAG, "mini_hooks: jsapi.m.r0 hooked → mini_call_api");
+                    Log.i(TAG, "mini_hooks: jsapi.m.q0 hooked → mini_call_api (params="
+                            + target.getParameterTypes().length + ")");
                 } else {
-                    Log.w(TAG, "mini_hooks: jsapi.m.r0 hookNative returned null");
+                    Log.w(TAG, "mini_hooks: jsapi.m.q0 hookNative returned null");
                 }
             } else {
-                Log.w(TAG, "mini_hooks: jsapi.m.r0 method not found");
+                // Dump all method names/param-counts to aid future diagnosis
+                java.lang.reflect.Method[] all = jsapiCls.getDeclaredMethods();
+                StringBuilder sb = new StringBuilder("mini_hooks: jsapi.m methods: ");
+                for (java.lang.reflect.Method m : all) sb.append(m.getName()).append('(').append(m.getParameterTypes().length).append(") ");
+                Log.w(TAG, sb.toString());
             }
         } catch (Exception e) {
-            Log.w(TAG, "mini_hooks: jsapi.m.r0 failed: " + e);
+            Log.w(TAG, "mini_hooks: jsapi.m.q0 failed: " + e);
         }
 
         // ── xf1.q.q / xf1.q.d → mini_request ──────────────────────────────
