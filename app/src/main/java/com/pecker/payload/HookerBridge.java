@@ -24,7 +24,6 @@ public class HookerBridge {
     // injects payload into all com.tencent.mm:* sub-processes via the zygote
     // hook, but we must only bind the socket in appbrand containers.
     private static final class SocketChannel {
-        private static final String SOCKET_NAME = "pecker";
         private static volatile OutputStream activeOut = null;
         private static final Object LOCK = new Object();
 
@@ -35,6 +34,19 @@ public class HookerBridge {
             // The C++ constructor's env-var check (Layer 1) handles the early
             // gate; this is a belt-and-suspenders safety net.
             String procName = currentProcessName();
+
+            // Each appbrand process gets its own socket name to avoid the bind
+            // race when WeChat pre-warms appbrand0 and appbrand1 simultaneously.
+            //   com.tencent.mm:appbrand0 → @pecker_appbrand0
+            //   com.tencent.mm:appbrand1 → @pecker_appbrand1
+            //   APK tasks (any other process)  → @pecker  (unchanged)
+            final String socketName;
+            if (procName != null && procName.contains(":appbrand")) {
+                socketName = "pecker_" + procName.substring(procName.lastIndexOf(':') + 1);
+            } else {
+                socketName = "pecker";
+            }
+
             if (procName != null
                     && procName.startsWith("com.tencent.mm")
                     && !procName.contains(":appbrand")) {
@@ -46,8 +58,8 @@ public class HookerBridge {
                 // send() will be a no-op because activeOut stays null.
             } else {
                 Thread t = new Thread(() -> {
-                    try (LocalServerSocket srv = new LocalServerSocket(SOCKET_NAME)) {
-                        Log.i(TAG, "socket_channel: listening @" + SOCKET_NAME
+                    try (LocalServerSocket srv = new LocalServerSocket(socketName)) {
+                        Log.i(TAG, "socket_channel: listening @" + socketName
                                 + (procName != null ? " proc=" + procName : ""));
                         while (true) {
                             LocalSocket conn = srv.accept();
