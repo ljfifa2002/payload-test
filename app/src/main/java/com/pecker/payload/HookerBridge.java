@@ -1530,6 +1530,30 @@ public class HookerBridge {
         }
         int installed = 0;
 
+        // Obtain WeChat's PathClassLoader so Class.forName can find WeChat app classes.
+        // HookerBridge is loaded by InMemoryDexClassLoader whose parent chain is
+        // BootClassLoader → InMemoryDexClassLoader. WeChat's own classes (AppBrandRuntime,
+        // jsapi.m, xf1.q) live in WeChat's PathClassLoader which is completely separate.
+        // Class.forName(name) without a ClassLoader uses HookerBridge's ClassLoader and
+        // cannot see WeChat classes → ClassNotFoundException.
+        // Fix: get the app ClassLoader from ActivityThread.currentApplication().
+        ClassLoader appCL = null;
+        try {
+            Class<?> atCls = Class.forName("android.app.ActivityThread");
+            java.lang.reflect.Method curApp = atCls.getDeclaredMethod("currentApplication");
+            curApp.setAccessible(true);
+            Object app = curApp.invoke(null);
+            if (app != null) {
+                appCL = app.getClass().getClassLoader();
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "mini_hooks: failed to get app ClassLoader: " + e);
+        }
+        if (appCL == null) {
+            Log.w(TAG, "mini_hooks: appCL null, aborting");
+            return 0;
+        }
+
         // ── AppBrandRuntime.i → mini_launch ─────────────────────────────────
         // Callstack evidence (WeChat 8.0.71): AppBrandRuntime.i:48 is the
         // mini-program launch entry point. Earlier analysis mistakenly
@@ -1539,7 +1563,7 @@ public class HookerBridge {
         // whose single parameter is NOT a primitive (it should be an
         // AppBrandInitConfig subclass).
         try {
-            Class<?> runtimeCls = Class.forName("com.tencent.mm.plugin.appbrand.AppBrandRuntime");
+            Class<?> runtimeCls = Class.forName("com.tencent.mm.plugin.appbrand.AppBrandRuntime", true, appCL);
             java.lang.reflect.Method target = null;
             for (java.lang.reflect.Method m : runtimeCls.getDeclaredMethods()) {
                 if ("i".equals(m.getName()) && m.getParameterTypes().length == 1
@@ -1582,7 +1606,7 @@ public class HookerBridge {
         // handler and only fires for the subset of APIs that check permissions.
         // q0 has >= 2 params (apiName + data at minimum).
         try {
-            Class<?> jsapiCls = Class.forName("com.tencent.mm.plugin.appbrand.jsapi.m");
+            Class<?> jsapiCls = Class.forName("com.tencent.mm.plugin.appbrand.jsapi.m", true, appCL);
             java.lang.reflect.Method target = null;
             for (java.lang.reflect.Method m : jsapiCls.getDeclaredMethods()) {
                 if ("q0".equals(m.getName()) && m.getParameterTypes().length >= 2) {
@@ -1618,7 +1642,7 @@ public class HookerBridge {
         // q: outgoing request (8 declared params including task-id + api-name)
         // d: response callback (9 declared params including status-code + body)
         try {
-            Class<?> xf1q = Class.forName("xf1.q");
+            Class<?> xf1q = Class.forName("xf1.q", true, appCL);
             java.lang.reflect.Method targetQ = null;
             java.lang.reflect.Method targetD = null;
             for (java.lang.reflect.Method m : xf1q.getDeclaredMethods()) {
