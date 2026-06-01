@@ -17,6 +17,10 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
+// Bumped on every pushed commit so logcat immediately reveals which binary is deployed.
+// Format: YYYY.MM.DD-<short-hash>
+#define PAYLOAD_VERSION "2026.06.01-c343cb3"
+
 // should_activate decides whether payload hooks should be installed in the
 // current process.
 //
@@ -95,7 +99,7 @@ static void payload_init() {
         // JS runtime runs.
         return;
     }
-    LOGI("payload_init: activating");
+    LOGI("payload_init: activating version=" PAYLOAD_VERSION);
 
     int sh_ret = shadowhook_init(SHADOWHOOK_MODE_UNIQUE, false);
     if (sh_ret != 0) {
