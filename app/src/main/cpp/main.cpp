@@ -180,8 +180,8 @@ static void payload_init() {
             }
 
             if (installMini) {
-                // Retry every 2 s until hooks install or 30 s elapses.
-                for (int attempt = 1; attempt <= 15; attempt++) {
+                // Retry every 2 s until hooks install or 60 s elapses.
+                for (int attempt = 1; attempt <= 30; attempt++) {
                     sleep(2);
                     jint n = tenv->CallStaticIntMethod(bridgeClass, installMini);
                     if (tenv->ExceptionCheck()) tenv->ExceptionClear();
