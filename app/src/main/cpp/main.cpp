@@ -157,12 +157,31 @@ static void payload_init() {
     // can be 10-30 s after the appbrand process starts.  A single sleep(2) fires
     // too early and gets ClassNotFoundException for all three targets.
     //
-    // Strategy: retry every 2 s, up to 30 s total (15 attempts), stopping as
+    // Strategy: retry every 2 s, up to 60 s total (30 attempts), stopping as
     // soon as installMiniHooks() returns > 0 (at least one hook installed).
     // This thread is ONLY started in appbrand processes.
-    const char* process_name = getenv("NCORE_PROCESS_NAME");
-    bool in_appbrand = (process_name != nullptr)
-                    && (strstr(process_name, ":appbrand") != nullptr);
+    //
+    // in_appbrand detection uses the same two-layer strategy as should_activate():
+    //   Layer 1: NCORE_PROCESS_NAME env var (set by ncore ≥ 57a1c96 before dlopen)
+    //   Layer 2: /proc/self/cmdline fallback (works on any ncore version)
+    bool in_appbrand = false;
+    {
+        const char* env_name = getenv("NCORE_PROCESS_NAME");
+        if (env_name != nullptr && env_name[0] != '\0') {
+            in_appbrand = strstr(env_name, ":appbrand") != nullptr;
+        } else {
+            // Fallback: read process name from cmdline.
+            // At this point (payload_init constructor) android_os_Process_setArgV0
+            // has already run for appbrand children, so cmdline is reliable here.
+            char cmdline[256] = {};
+            int fd = open("/proc/self/cmdline", O_RDONLY);
+            if (fd >= 0) {
+                read(fd, cmdline, sizeof(cmdline) - 1);
+                close(fd);
+                in_appbrand = strstr(cmdline, ":appbrand") != nullptr;
+            }
+        }
+    }
     if (in_appbrand) {
         JavaVM* vm_ref = vm;
         std::thread([vm_ref]() {
