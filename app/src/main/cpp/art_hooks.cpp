@@ -421,6 +421,10 @@ void install_art_inline_hooks(JNIEnv* env, JavaVM* vm) {
 
 // armeabi-v7a: ART inline hooks are not implemented (ARM64-specific mechanism).
 // LSPlant in hooks.cpp covers the same APIs on ARM32 devices.
+// g_ep_offset must still be defined (referenced by hooks.cpp) — standard ARM32 layout
+// has entry_point_from_quick_compiled_code_ at offset 32, same as ARM64.
+int g_ep_offset = 32;
+
 void install_art_inline_hooks(JNIEnv* /*env*/, JavaVM* /*vm*/) {
     __android_log_print(ANDROID_LOG_INFO, "payload",
         "art_hooks: armeabi-v7a build, skipping inline hooks (LSPlant handles it)");
