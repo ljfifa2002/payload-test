@@ -2,6 +2,8 @@ package com.pecker.payload;
 
 import android.net.LocalServerSocket;
 import android.net.LocalSocket;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.Log;
 import java.io.OutputStream;
 import java.lang.reflect.Method;
@@ -1533,29 +1535,20 @@ public class HookerBridge {
         }
         int installed = 0;
 
-        // Obtain WeChat's PathClassLoader so Class.forName can find WeChat app classes.
-        // HookerBridge is loaded by InMemoryDexClassLoader whose parent chain is
-        // BootClassLoader → InMemoryDexClassLoader. WeChat's own classes (AppBrandRuntime,
-        // jsapi.m, xf1.q) live in WeChat's PathClassLoader which is completely separate.
-        // Class.forName(name) without a ClassLoader uses HookerBridge's ClassLoader and
-        // cannot see WeChat classes → ClassNotFoundException.
-        // Fix: get the app ClassLoader from ActivityThread.currentApplication().
-        ClassLoader appCL = null;
-        try {
-            Class<?> atCls = Class.forName("android.app.ActivityThread");
-            java.lang.reflect.Method curApp = atCls.getDeclaredMethod("currentApplication");
-            curApp.setAccessible(true);
-            Object app = curApp.invoke(null);
-            if (app != null) {
-                appCL = app.getClass().getClassLoader();
-            }
-        } catch (Exception e) {
-            Log.w(TAG, "mini_hooks: failed to get app ClassLoader: " + e);
-        }
+        // Use the calling thread's context ClassLoader to resolve WeChat classes.
+        // This method must be called on a WeChat app thread (via Handler/main looper)
+        // so that the context ClassLoader includes WeChat's full class hierarchy —
+        // base PathClassLoader AND any Tinker/plugin patch DEXes loaded at runtime.
+        // Calling from a bare AttachCurrentThread native thread gives only BootCL,
+        // and ActivityThread.currentApplication().getClassLoader() gives only base
+        // PathCL — neither can see Tinker-patched versions of jsapi.m, AppBrandRuntime,
+        // or xf1.q that WeChat actually uses at runtime.
+        ClassLoader appCL = Thread.currentThread().getContextClassLoader();
         if (appCL == null) {
-            Log.w(TAG, "mini_hooks: appCL null, aborting");
+            Log.w(TAG, "mini_hooks: thread context CL null, aborting");
             return 0;
         }
+        Log.i(TAG, "mini_hooks: using CL=" + appCL.getClass().getName());
 
         // ── AppBrandRuntime.i → mini_launch ─────────────────────────────────
         // Callstack evidence (WeChat 8.0.71): AppBrandRuntime.i:48 is the
@@ -1698,6 +1691,25 @@ public class HookerBridge {
 
         Log.i(TAG, "mini_hooks: installed=" + installed);
         return installed;
+    }
+
+    // Called from the Phase 10 C++ native thread. Posts installMiniHooks() to the
+    // appbrand main looper so it runs on a WeChat app thread whose context ClassLoader
+    // includes Tinker/plugin patch DEXes — the only way to find the runtime versions
+    // of jsapi.m, AppBrandRuntime, and xf1.q that WeChat actually calls.
+    // Returns immediately; the actual hook installation is asynchronous.
+    public static void scheduleInstallMiniHooks() {
+        Looper main = Looper.getMainLooper();
+        if (main == null) {
+            Log.w(TAG, "mini_hooks: main looper null, falling back to direct call");
+            installMiniHooks();
+            return;
+        }
+        new Handler(main).post(() -> {
+            Log.i(TAG, "mini_hooks: running on main looper thread="
+                    + Thread.currentThread().getName());
+            installMiniHooks();
+        });
     }
 
     // Called by C++ LSPlant after it hooks AppBrandRuntime.m0.

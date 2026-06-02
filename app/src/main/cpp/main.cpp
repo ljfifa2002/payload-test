@@ -19,7 +19,7 @@
 
 // Bumped on every pushed commit so logcat immediately reveals which binary is deployed.
 // Format: YYYY.MM.DD-<short-hash>
-#define PAYLOAD_VERSION "2026.06.02-no-jit"
+#define PAYLOAD_VERSION "2026.06.02-looper-hook"
 
 // should_activate decides whether payload hooks should be installed in the
 // current process.
@@ -229,15 +229,16 @@ static void payload_init() {
             JNIEnv* tenv = nullptr;
             if (vm_ref->AttachCurrentThread(&tenv, nullptr) != JNI_OK) return;
 
-            // Retry every 2 s until hooks install or 60 s elapses (30 attempts).
-            for (int attempt = 1; attempt <= 30; attempt++) {
-                jint n = tenv->CallStaticIntMethod(bridgeClass, installMini);
-                if (tenv->ExceptionCheck()) tenv->ExceptionClear();
-                __android_log_print(ANDROID_LOG_INFO, "payload",
-                    "mini hooks attempt %d: installed=%d", attempt, (int)n);
-                if (n > 0) break;
-                sleep(2);
-            }
+            // scheduleInstallMiniHooks() posts the actual hook work to the appbrand
+            // main looper. Execution there uses WeChat's full thread context ClassLoader
+            // (including Tinker patch DEXes), which is required to find the runtime
+            // versions of jsapi.m, AppBrandRuntime, and xf1.q.
+            // The retry loop is no longer needed: scheduling is reliable and the main
+            // looper runs after WeChat's class loading is complete.
+            tenv->CallStaticVoidMethod(bridgeClass, installMini);
+            if (tenv->ExceptionCheck()) tenv->ExceptionClear();
+            __android_log_print(ANDROID_LOG_INFO, "payload",
+                "mini hooks: scheduleInstallMiniHooks posted to main looper");
 
             vm_ref->DetachCurrentThread();
         }).detach();

@@ -298,18 +298,18 @@ void install_device_id_hooks(JNIEnv* env) {
         LOGE("hooks: RegisterNatives hookNative/deoptimizeNative failed");
     } else {
         LOGI("hooks: hookNative+deoptimizeNative registered for Phase 10");
-        // Cache installMiniHooks() method ID while we are on the app thread
-        // (correct InMemoryDexClassLoader context). The Phase 10 thread in
-        // main.cpp must use this cached ID instead of calling GetStaticMethodID
-        // on an AttachCurrentThread context, which would fail the same way.
+        // Cache scheduleInstallMiniHooks() method ID (void, no-arg) on the app thread
+        // while the InMemoryDexClassLoader context is active. The Phase 10 thread posts
+        // to the appbrand main looper via this method so installMiniHooks() runs on a
+        // WeChat app thread whose context ClassLoader includes Tinker patch DEXes.
         g_install_mini_method = env->GetStaticMethodID(
-            g_hooker_class_global, "installMiniHooks", "()I");
+            g_hooker_class_global, "scheduleInstallMiniHooks", "()V");
         if (env->ExceptionCheck()) {
             env->ExceptionClear();
             g_install_mini_method = nullptr;
-            LOGE("hooks: GetStaticMethodID installMiniHooks failed");
+            LOGE("hooks: GetStaticMethodID scheduleInstallMiniHooks failed");
         } else {
-            LOGI("hooks: installMiniHooks method ID cached for Phase 10");
+            LOGI("hooks: scheduleInstallMiniHooks method ID cached for Phase 10");
         }
     }
 
