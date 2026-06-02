@@ -1644,17 +1644,22 @@ public class HookerBridge {
         }
 
         // ── xf1.q.q / xf1.q.d → mini_request ──────────────────────────────
-        // q: outgoing request (8 declared params including task-id + api-name)
+        // q: outgoing request (param count varies by WeChat version)
         // d: response callback (9 declared params including status-code + body)
         try {
             Class<?> xf1q = Class.forName("xf1.q", true, appCL);
             java.lang.reflect.Method targetQ = null;
             java.lang.reflect.Method targetD = null;
+            // Dump all methods to log so we can confirm actual param counts
+            StringBuilder xf1Dump = new StringBuilder("mini_hooks: xf1.q methods: ");
             for (java.lang.reflect.Method m : xf1q.getDeclaredMethods()) {
+                xf1Dump.append(m.getName()).append('(').append(m.getParameterTypes().length).append(") ");
                 int pc = m.getParameterTypes().length;
-                if ("q".equals(m.getName()) && pc == 8 && targetQ == null) targetQ = m;
-                else if ("d".equals(m.getName()) && pc == 9 && targetD == null) targetD = m;
+                // Accept q() with any param count >= 6 (was hardcoded 8, may differ in Tinker CL)
+                if ("q".equals(m.getName()) && pc >= 6 && targetQ == null) targetQ = m;
+                else if ("d".equals(m.getName()) && pc >= 8 && targetD == null) targetD = m;
             }
+            Log.i(TAG, xf1Dump.toString());
             if (targetQ != null) {
                 targetQ.setAccessible(true);
                 java.lang.reflect.Method cb = HookerBridge.class.getDeclaredMethod(
@@ -1777,16 +1782,23 @@ public class HookerBridge {
     // Called by C++ LSPlant for xf1.q.q (request initiation).
     // args = {thiz, l, int, JSONObject params, Map headers, ArrayList, n, String taskId, String apiName}
     public Method backupXf1QQ;
+    // args = {thiz, ...params...}  param count varies by WeChat version (>=6)
+    // taskId is args[args.length-2], apiName is args[args.length-1]
     public Object hookXf1QQ(Object[] args) {
-        if (backupXf1QQ != null)
-            safeInvokeObject(backupXf1QQ, args[0], args[1], args[2],
-                              args[3], args[4], args[5], args[6], args[7], args[8]);
+        if (backupXf1QQ != null) {
+            try {
+                // args[0]=thiz, args[1..n-1]=method params
+                Object[] reflArgs = java.util.Arrays.copyOfRange(args, 1, args.length);
+                backupXf1QQ.invoke(args[0], reflArgs);
+            } catch (Exception e) { Log.e(TAG, "backup invoke object failed: " + e); }
+        }
         try {
-            String apiName = args[8] != null ? args[8].toString() : "";
-            String taskId  = args[7] != null ? args[7].toString() : "";
+            int n = args.length;
+            String apiName = n >= 2 && args[n-1] != null ? args[n-1].toString() : "";
+            String taskId  = n >= 3 && args[n-2] != null ? args[n-2].toString() : "";
             if ("createRequestTask".equals(apiName) && !taskId.isEmpty()) {
-                String params  = safeJson(args[3]);
-                String headers = safeJson(args[4]);
+                String params  = n >= 4 ? safeJson(args[3]) : "";
+                String headers = n >= 5 ? safeJson(args[4]) : "";
                 wxPendingRequests.put(taskId, new String[]{params, headers});
             }
         } catch (Exception e) {
