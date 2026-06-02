@@ -1796,9 +1796,9 @@ public class HookerBridge {
                 Log.w(TAG, "jsapi_thiz_fields dump failed: " + e);
             }
         }
-        // Backup path: if AppBrandRuntime.i hook missed the launch event, extract
-        // appId + brandName from the AppBrandRuntime instance held in jsapi thiz
-        // field "D" (class b9, declared type AppBrandRuntime, confirmed in dump).
+        // Backup path A: extract appId+brandName from AppBrandRuntime instance
+        // in jsapi thiz field "D" (class b9, declared type AppBrandRuntime).
+        // Pattern A → partial send (no iconUrl).
         if (!g_mini_launch_sent && args[0] != null) {
             try {
                 Object runtime = fieldObjectInHierarchy(args[0], "D");
@@ -1809,7 +1809,24 @@ public class HookerBridge {
                     }
                 }
             } catch (Exception e) {
-                Log.w(TAG, "jsapi mini_launch backup failed: " + e);
+                Log.w(TAG, "jsapi mini_launch backup-D failed: " + e);
+            }
+        }
+        // Backup path C: upgrade to full send (with iconUrl) by scanning all fields
+        // of AppBrandRuntimeContainerWC (jsapi thiz field "C", class b9).
+        // Iterates every field of the container looking for one whose toString()
+        // matches Pattern B (contains "appId='wx"), which includes iconUrl.
+        if (!g_mini_launch_full && args[0] != null) {
+            try {
+                Object container = fieldObjectInHierarchy(args[0], "C");
+                if (container != null) {
+                    String[] info = scanFieldsForMiniLaunch(container);
+                    if (info != null) {
+                        sendMiniLaunch(info[0], info[1], info[2], info[3], info[4]);
+                    }
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "jsapi mini_launch backup-C failed: " + e);
             }
         }
         try {
@@ -2007,6 +2024,31 @@ public class HookerBridge {
             } catch (Exception e) {
                 return null;
             }
+        }
+        return null;
+    }
+
+    // Scan every declared field of obj (and its superclass chain) looking for one
+    // whose toString() matches Pattern B (contains "appId='wx"). Returns the
+    // parsed info array or null if nothing found.
+    // Used for the AppBrandRuntimeContainerWC path (field "C") to find iconUrl.
+    private static String[] scanFieldsForMiniLaunch(Object obj) {
+        if (obj == null) return null;
+        Class<?> cls = obj.getClass();
+        while (cls != null && !cls.equals(Object.class)) {
+            for (java.lang.reflect.Field f : cls.getDeclaredFields()) {
+                try {
+                    f.setAccessible(true);
+                    Object val = f.get(obj);
+                    if (val == null) continue;
+                    String s = val.toString();
+                    if (s.contains("appId='wx")) {
+                        String[] info = parseMiniLaunchInfo(s);
+                        if (info != null) return info;
+                    }
+                } catch (Exception ignored) {}
+            }
+            cls = cls.getSuperclass();
         }
         return null;
     }
