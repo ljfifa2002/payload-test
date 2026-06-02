@@ -1729,36 +1729,29 @@ public class HookerBridge {
         });
     }
 
+    // Set to true once a valid mini_launch (appId starts with "wx") has been sent
+    // so we never send duplicates for the same appbrand process lifetime.
+    private volatile boolean g_mini_launch_sent = false;
+
     // Called by C++ LSPlant after it hooks AppBrandRuntime.m0.
     // args = {thiz, AppBrandInitConfig}
     public Method backupAppBrandRuntimeM0;
     public Object hookAppBrandRuntimeM0(Object[] args) {
         if (backupAppBrandRuntimeM0 != null)
             safeInvokeObject(backupAppBrandRuntimeM0, args[0], args[1], args[2]);
+        if (g_mini_launch_sent || args[1] == null) return null;
         try {
-            Object config = args[1];
-            // Use fieldStrInHierarchy instead of Class.forName() so we never depend
-            // on a fixed class name — WeChat obfuscation / Tinker renames are transparent.
-            String appId    = fieldStrInHierarchy(config, "d");
-            String brand    = fieldStrInHierarchy(config, "e");
-            String icon     = fieldStrInHierarchy(config, "f");
-            String username = fieldStrInHierarchy(config, "v");
-            String ver      = fieldStrInHierarchy(config, "J");
-            String json = "{\"type\":\"mini_launch\""
-                + ",\"appId\":\""        + jsonEscape(appId)    + "\""
-                + ",\"brandName\":\""    + jsonEscape(brand)    + "\""
-                + ",\"appletBrandName\":\"" + jsonEscape(brand) + "\""
-                + ",\"iconUrl\":\""      + jsonEscape(icon)     + "\""
-                + ",\"appletIconUrl\":\"" + jsonEscape(icon)    + "\""
-                + ",\"appVersion\":\""   + jsonEscape(ver)      + "\""
-                + ",\"appletVersion\":\"" + jsonEscape(ver)     + "\""
-                + ",\"username\":\""     + jsonEscape(username) + "\""
-                + ",\"timestamp\":"      + System.currentTimeMillis()
-                + "}";
-            Log.i(TAG, json);
-            SocketChannel.send(json);
+            // Approach: parse known toString() patterns rather than guessing field names.
+            // The hook fires on multiple overloads; only two produce valid launch data.
+            String[] info = parseMiniLaunchInfo(args[1].toString());
+            if (info != null) {
+                sendMiniLaunch(info[0], info[1], info[2], info[3], info[4]);
+            }
         } catch (Exception e) {
             Log.w(TAG, "hookAppBrandRuntimeM0 failed: " + e);
+        }
+        return null;
+    }
         }
         return null;
     }
@@ -1800,6 +1793,22 @@ public class HookerBridge {
                 Log.i(TAG, sb.toString());
             } catch (Exception e) {
                 Log.w(TAG, "jsapi_thiz_fields dump failed: " + e);
+            }
+        }
+        // Backup path: if AppBrandRuntime.i hook missed the launch event, extract
+        // appId + brandName from the AppBrandRuntime instance held in jsapi thiz
+        // field "D" (class b9, declared type AppBrandRuntime, confirmed in dump).
+        if (!g_mini_launch_sent && args[0] != null) {
+            try {
+                Object runtime = fieldObjectInHierarchy(args[0], "D");
+                if (runtime != null) {
+                    String[] info = parseMiniLaunchInfo(runtime.toString());
+                    if (info != null) {
+                        sendMiniLaunch(info[0], info[1], info[2], info[3], info[4]);
+                    }
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "jsapi mini_launch backup failed: " + e);
             }
         }
         try {
@@ -1894,6 +1903,105 @@ public class HookerBridge {
     }
 
     // ---- Helpers for WeChat mini-program hooks ----
+
+    // Parse mini_launch fields from known WeChat toString() patterns.
+    // Returns String[]{appId, brandName, iconUrl, username, version} or null if
+    // no valid appId (starting with "wx") is found.
+    //
+    // Pattern A — AppBrandRuntimeWC.toString():
+    //   "[AppBrandRuntimeWC::wxbc947d1871f66da8::德物流寄大件上门取件栗金::0::@hash]"
+    //
+    // Pattern B — Params.toString() containing AppBrandSysConfigLU:
+    //   "Params{...appId='wxXXX'...brandName='...'...appIconUrl='http://...'...
+    //    userName='gh_XXX'...pkgVersion=N...}"
+    private static String[] parseMiniLaunchInfo(String s) {
+        if (s == null || s.isEmpty()) return null;
+
+        // Pattern A: [AppBrandRuntimeWC::appId::brandName::...]
+        if (s.startsWith("[AppBrandRuntimeWC::")) {
+            String inner = s.substring("[AppBrandRuntimeWC::".length());
+            String[] parts = inner.split("::");
+            if (parts.length >= 2 && parts[0].startsWith("wx")) {
+                String appId = parts[0];
+                String brand = parts[1];
+                return new String[]{appId, brand, "", "", ""};
+            }
+        }
+
+        // Pattern B: Params / config toString() containing appId='wx...'
+        if (s.contains("appId='wx")) {
+            String appId    = extractQuoted(s, "appId");
+            String brand    = extractQuoted(s, "brandName");
+            String icon     = extractQuoted(s, "appIconUrl");
+            String username = extractQuoted(s, "userName");
+            String ver      = extractUnquotedInt(s, "pkgVersion");
+            if (appId.startsWith("wx")) {
+                return new String[]{appId, brand, icon, username, ver};
+            }
+        }
+
+        return null;
+    }
+
+    // Extract value of key='value' from a toString() string.
+    private static String extractQuoted(String s, String key) {
+        String needle = key + "='";
+        int start = s.indexOf(needle);
+        if (start < 0) return "";
+        start += needle.length();
+        int end = s.indexOf('\'', start);
+        return end > start ? s.substring(start, end) : "";
+    }
+
+    // Extract integer value of key=N (no quotes) from a toString() string.
+    private static String extractUnquotedInt(String s, String key) {
+        String needle = key + "=";
+        int start = s.indexOf(needle);
+        if (start < 0) return "";
+        start += needle.length();
+        int end = start;
+        while (end < s.length() && Character.isDigit(s.charAt(end))) end++;
+        return end > start ? s.substring(start, end) : "";
+    }
+
+    // Send a mini_launch message and mark g_mini_launch_sent so it fires only once.
+    private void sendMiniLaunch(String appId, String brand, String icon,
+                                String username, String ver) {
+        if (g_mini_launch_sent) return;
+        g_mini_launch_sent = true;
+        String json = "{\"type\":\"mini_launch\""
+            + ",\"appId\":\""           + jsonEscape(appId)    + "\""
+            + ",\"brandName\":\""       + jsonEscape(brand)    + "\""
+            + ",\"appletBrandName\":\"" + jsonEscape(brand)    + "\""
+            + ",\"iconUrl\":\""         + jsonEscape(icon)     + "\""
+            + ",\"appletIconUrl\":\""   + jsonEscape(icon)     + "\""
+            + ",\"appVersion\":\""      + jsonEscape(ver)      + "\""
+            + ",\"appletVersion\":\""   + jsonEscape(ver)      + "\""
+            + ",\"username\":\""        + jsonEscape(username) + "\""
+            + ",\"timestamp\":"         + System.currentTimeMillis()
+            + "}";
+        Log.i(TAG, "mini_launch: " + json);
+        SocketChannel.send(json);
+    }
+
+    // Return the Object value of the first field named fieldName found in obj's
+    // class hierarchy. Returns null if not found or the field value is null.
+    private static Object fieldObjectInHierarchy(Object obj, String fieldName) {
+        if (obj == null) return null;
+        Class<?> cls = obj.getClass();
+        while (cls != null && !cls.equals(Object.class)) {
+            try {
+                java.lang.reflect.Field f = cls.getDeclaredField(fieldName);
+                f.setAccessible(true);
+                return f.get(obj);
+            } catch (NoSuchFieldException ignored) {
+                cls = cls.getSuperclass();
+            } catch (Exception e) {
+                return null;
+            }
+        }
+        return null;
+    }
 
     // Search obj's class hierarchy (declared fields only per level) for a field
     // named fieldName and return its string value, or "" if not found / null.
