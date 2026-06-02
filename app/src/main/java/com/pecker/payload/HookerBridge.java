@@ -1655,8 +1655,9 @@ public class HookerBridge {
             for (java.lang.reflect.Method m : xf1q.getDeclaredMethods()) {
                 xf1Dump.append(m.getName()).append('(').append(m.getParameterTypes().length).append(") ");
                 int pc = m.getParameterTypes().length;
-                // Accept q() with any param count >= 6 (was hardcoded 8, may differ in Tinker CL)
-                if ("q".equals(m.getName()) && pc >= 6 && targetQ == null) targetQ = m;
+                // In WeChat 8.0.71 with Tinker patch the send-side method was
+                // renamed from "q" to "g" (8 params). Accept either name.
+                if (("q".equals(m.getName()) || "g".equals(m.getName())) && pc >= 6 && targetQ == null) targetQ = m;
                 else if ("d".equals(m.getName()) && pc >= 8 && targetD == null) targetD = m;
             }
             Log.i(TAG, xf1Dump.toString());
@@ -1679,7 +1680,7 @@ public class HookerBridge {
                     Log.w(TAG, "mini_hooks: xf1.q.q hookNative returned null");
                 }
             } else {
-                Log.w(TAG, "mini_hooks: xf1.q.q (8 params) not found");
+                Log.w(TAG, "mini_hooks: xf1.q send-side (q/g, >=6 params) not found");
             }
             if (targetD != null) {
                 targetD.setAccessible(true);
