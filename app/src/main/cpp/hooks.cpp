@@ -219,6 +219,23 @@ static jobject JNICALL native_hook_method(JNIEnv* env, jclass /*cls*/,
     return backup;
 }
 
+// JNI: HookerBridge.deoptimizeNative(Object method) -> void
+// Called from installMiniHooks() after hooking a WeChat method to force its JIT-compiled
+// callers back to the interpreter, so that ArtMethod entry_point dispatch is used and
+// our LSPlant hook actually fires.
+static void JNICALL native_deoptimize(JNIEnv* env, jclass /*cls*/, jobject method) {
+    if (!method) {
+        LOGE("deoptimizeNative: null method");
+        return;
+    }
+    bool ok = lsplant::Deoptimize(env, method);
+    if (ok) {
+        LOGI("deoptimizeNative: ok");
+    } else {
+        LOGE("deoptimizeNative: failed");
+    }
+}
+
 void install_device_id_hooks(JNIEnv* env) {
     jclass hooker_class = load_hooker_class(env);
     if (hooker_class == nullptr) {
@@ -245,17 +262,20 @@ void install_device_id_hooks(JNIEnv* env) {
         check_exception(env, "SetStaticObjectField sInstance");
     }
 
-    // Register hookNative so installMiniHooks() can call back into LSPlant.
+    // Register hookNative and deoptimizeNative for Phase 10.
     JNINativeMethod mini_native[] = {
         {"hookNative",
          "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
-         reinterpret_cast<void*>(native_hook_method)}
+         reinterpret_cast<void*>(native_hook_method)},
+        {"deoptimizeNative",
+         "(Ljava/lang/Object;)V",
+         reinterpret_cast<void*>(native_deoptimize)},
     };
-    if (env->RegisterNatives(hooker_class, mini_native, 1) != 0) {
-        check_exception(env, "RegisterNatives hookNative");
-        LOGE("hooks: RegisterNatives hookNative failed");
+    if (env->RegisterNatives(hooker_class, mini_native, 2) != 0) {
+        check_exception(env, "RegisterNatives hookNative/deoptimizeNative");
+        LOGE("hooks: RegisterNatives hookNative/deoptimizeNative failed");
     } else {
-        LOGI("hooks: hookNative registered for Phase 10");
+        LOGI("hooks: hookNative+deoptimizeNative registered for Phase 10");
         // Cache installMiniHooks() method ID while we are on the app thread
         // (correct InMemoryDexClassLoader context). The Phase 10 thread in
         // main.cpp must use this cached ID instead of calling GetStaticMethodID

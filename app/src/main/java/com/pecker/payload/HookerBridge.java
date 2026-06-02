@@ -214,6 +214,9 @@ public class HookerBridge {
     // the backup Method.  Implemented in libpayload.so and registered with
     // RegisterNatives during install_device_id_hooks().
     static native Object hookNative(Object targetMethod, Object hookerObj, Object callbackMethod);
+    // Force a method's JIT-compiled callers back to interpreter so LSPlant's
+    // ArtMethod entry_point dispatch fires correctly.
+    static native void deoptimizeNative(Object method);
 
     private String safeInvoke(Method m, Object thiz, Object... params) {
         try { return (String) m.invoke(thiz, params); }
@@ -1556,17 +1559,13 @@ public class HookerBridge {
 
         // ── AppBrandRuntime.i → mini_launch ─────────────────────────────────
         // Callstack evidence (WeChat 8.0.71): AppBrandRuntime.i:48 is the
-        // mini-program launch entry point. Earlier analysis mistakenly
-        // targeted m0 which does not exist in this version.
-        // We search for any method named "i" with exactly 1 parameter in
-        // AppBrandRuntime; if multiple overloads exist we take the first one
-        // whose single parameter is NOT a primitive (it should be an
-        // AppBrandInitConfig subclass).
+        // mini-program launch entry point. Method dump shows i(2) — two parameters,
+        // first is non-primitive (AppBrandInitConfig subclass).
         try {
             Class<?> runtimeCls = Class.forName("com.tencent.mm.plugin.appbrand.AppBrandRuntime", true, appCL);
             java.lang.reflect.Method target = null;
             for (java.lang.reflect.Method m : runtimeCls.getDeclaredMethods()) {
-                if ("i".equals(m.getName()) && m.getParameterTypes().length == 1
+                if ("i".equals(m.getName()) && m.getParameterTypes().length == 2
                         && !m.getParameterTypes()[0].isPrimitive()) {
                     target = m;
                     break;
@@ -1598,13 +1597,11 @@ public class HookerBridge {
         // ── jsapi.m.q0 → mini_call_api ──────────────────────────────────────
         // Callstack evidence (WeChat 8.0.71):
         //   jsapi.m.q0:248/329  ← top-level API queue entry, called for EVERY wx.* call
-        //   jsapi.m.o0:77       ← internal dispatcher
-        //   jsapi.q.a:188       ← executor
-        //   jsapi.m.r0:76/23    ← per-API handler (only some APIs, NOT the right target)
+        //   direct caller:       service.c0.q0:23 (single confirmed caller)
         //
-        // Hooking q0 captures all wx.* API calls.  r0 was wrong: it is a per-API
-        // handler and only fires for the subset of APIs that check permissions.
-        // q0 has >= 2 params (apiName + data at minimum).
+        // service.c0.q0 is JIT-compiled and calls jsapi.m.q0 via a direct call that
+        // bypasses ArtMethod entry_point dispatch. After hooking q0, we deoptimize
+        // service.c0.q0 to force it back to the interpreter so the hook fires.
         try {
             Class<?> jsapiCls = Class.forName("com.tencent.mm.plugin.appbrand.jsapi.m", true, appCL);
             java.lang.reflect.Method target = null;
@@ -1624,6 +1621,21 @@ public class HookerBridge {
                     installed++;
                     Log.i(TAG, "mini_hooks: jsapi.m.q0 hooked → mini_call_api (params="
                             + target.getParameterTypes().length + ")");
+                    // Deoptimize service.c0.q0 (the JIT-compiled direct caller) so it
+                    // re-dispatches through ArtMethod entry_point and our hook fires.
+                    try {
+                        Class<?> svcCls = Class.forName(
+                                "com.tencent.mm.plugin.appbrand.service.c0", true, appCL);
+                        for (java.lang.reflect.Method m : svcCls.getDeclaredMethods()) {
+                            if ("q0".equals(m.getName())) {
+                                deoptimizeNative(m);
+                                Log.i(TAG, "mini_hooks: service.c0.q0 deoptimized");
+                                break;
+                            }
+                        }
+                    } catch (Exception de) {
+                        Log.w(TAG, "mini_hooks: deoptimize service.c0.q0 failed: " + de);
+                    }
                 } else {
                     Log.w(TAG, "mini_hooks: jsapi.m.q0 hookNative returned null");
                 }
@@ -1693,7 +1705,7 @@ public class HookerBridge {
     public Method backupAppBrandRuntimeM0;
     public Object hookAppBrandRuntimeM0(Object[] args) {
         if (backupAppBrandRuntimeM0 != null)
-            safeInvokeObject(backupAppBrandRuntimeM0, args[0], args[1]);
+            safeInvokeObject(backupAppBrandRuntimeM0, args[0], args[1], args[2]);
         try {
             Object config = args[1];
             // Cast to AppBrandInitConfigWC for brand fields (v / d / e / f)
