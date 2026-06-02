@@ -1766,12 +1766,36 @@ public class HookerBridge {
 
     // Called by C++ LSPlant after it hooks jsapi_g.q0.
     // args = {thiz, String apiName, String data, String callbackId, int, boolean, c0, int}
+    // Set to true after the first hookJsapiQ0 field dump so we only log once.
+    private volatile boolean g_jsapi_fields_dumped = false;
+
     public Method backupJsapiQ0;
     public Object hookJsapiQ0(Object[] args) {
         Object result = null;
         if (backupJsapiQ0 != null)
             result = safeInvokeObject(backupJsapiQ0, args[0], args[1], args[2],
                                        args[3], args[4], args[5], args[6], args[7]);
+        // One-shot: dump all declared fields of the jsapi.m thiz object so we can
+        // identify the path to AppBrandInitConfigWC (appId / brandName / iconUrl).
+        if (!g_jsapi_fields_dumped && args[0] != null) {
+            g_jsapi_fields_dumped = true;
+            try {
+                StringBuilder sb = new StringBuilder("jsapi_thiz_fields: class=")
+                        .append(args[0].getClass().getName()).append(" fields=[");
+                for (java.lang.reflect.Field f : args[0].getClass().getDeclaredFields()) {
+                    f.setAccessible(true);
+                    Object val = null;
+                    try { val = f.get(args[0]); } catch (Exception ignored) {}
+                    sb.append(f.getName()).append('(').append(f.getType().getSimpleName()).append(')');
+                    if (val != null) sb.append('=').append(val.getClass().getName());
+                    sb.append(' ');
+                }
+                sb.append(']');
+                Log.i(TAG, sb.toString());
+            } catch (Exception e) {
+                Log.w(TAG, "jsapi_thiz_fields dump failed: " + e);
+            }
+        }
         try {
             String api  = args[1] != null ? args[1].toString() : "";
             String data = args[2] != null ? args[2].toString() : "";

@@ -19,7 +19,7 @@
 
 // Bumped on every pushed commit so logcat immediately reveals which binary is deployed.
 // Format: YYYY.MM.DD-<short-hash>
-#define PAYLOAD_VERSION "2026.06.02-xf1q-fix"
+#define PAYLOAD_VERSION "2026.06.02-jsapi-dump"
 
 // should_activate decides whether payload hooks should be installed in the
 // current process.
