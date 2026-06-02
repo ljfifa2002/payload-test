@@ -1737,14 +1737,13 @@ public class HookerBridge {
             safeInvokeObject(backupAppBrandRuntimeM0, args[0], args[1], args[2]);
         try {
             Object config = args[1];
-            // Cast to AppBrandInitConfigWC for brand fields (v / d / e / f)
-            Class<?> wcCls  = Class.forName("com.tencent.mm.plugin.appbrand.config.AppBrandInitConfigWC");
-            Class<?> luCls  = Class.forName("com.tencent.luggage.sdk.config.AppBrandInitConfigLU");
-            String username = fieldStr(wcCls, config, "v");
-            String appId    = fieldStr(wcCls, config, "d");
-            String brand    = fieldStr(wcCls, config, "e");
-            String icon     = fieldStr(wcCls, config, "f");
-            String ver      = fieldStr(luCls,  config, "J");
+            // Use fieldStrInHierarchy instead of Class.forName() so we never depend
+            // on a fixed class name — WeChat obfuscation / Tinker renames are transparent.
+            String appId    = fieldStrInHierarchy(config, "d");
+            String brand    = fieldStrInHierarchy(config, "e");
+            String icon     = fieldStrInHierarchy(config, "f");
+            String username = fieldStrInHierarchy(config, "v");
+            String ver      = fieldStrInHierarchy(config, "J");
             String json = "{\"type\":\"mini_launch\""
                 + ",\"appId\":\""        + jsonEscape(appId)    + "\""
                 + ",\"brandName\":\""    + jsonEscape(brand)    + "\""
@@ -1780,17 +1779,24 @@ public class HookerBridge {
         if (!g_jsapi_fields_dumped && args[0] != null) {
             g_jsapi_fields_dumped = true;
             try {
+                // Walk the full class hierarchy so inherited fields (in jsapi.m
+                // superclasses) are also visible — service.c0 extends jsapi.m.
                 StringBuilder sb = new StringBuilder("jsapi_thiz_fields: class=")
-                        .append(args[0].getClass().getName()).append(" fields=[");
-                for (java.lang.reflect.Field f : args[0].getClass().getDeclaredFields()) {
-                    f.setAccessible(true);
-                    Object val = null;
-                    try { val = f.get(args[0]); } catch (Exception ignored) {}
-                    sb.append(f.getName()).append('(').append(f.getType().getSimpleName()).append(')');
-                    if (val != null) sb.append('=').append(val.getClass().getName());
-                    sb.append(' ');
+                        .append(args[0].getClass().getName());
+                Class<?> cls = args[0].getClass();
+                while (cls != null && !cls.equals(Object.class)) {
+                    sb.append(" [").append(cls.getSimpleName()).append(": ");
+                    for (java.lang.reflect.Field f : cls.getDeclaredFields()) {
+                        f.setAccessible(true);
+                        Object val = null;
+                        try { val = f.get(args[0]); } catch (Exception ignored) {}
+                        sb.append(f.getName()).append('(').append(f.getType().getSimpleName()).append(')');
+                        if (val != null) sb.append('=').append(val.getClass().getName());
+                        sb.append(' ');
+                    }
+                    sb.append(']');
+                    cls = cls.getSuperclass();
                 }
-                sb.append(']');
                 Log.i(TAG, sb.toString());
             } catch (Exception e) {
                 Log.w(TAG, "jsapi_thiz_fields dump failed: " + e);
@@ -1888,6 +1894,26 @@ public class HookerBridge {
     }
 
     // ---- Helpers for WeChat mini-program hooks ----
+
+    // Search obj's class hierarchy (declared fields only per level) for a field
+    // named fieldName and return its string value, or "" if not found / null.
+    private static String fieldStrInHierarchy(Object obj, String fieldName) {
+        if (obj == null) return "";
+        Class<?> cls = obj.getClass();
+        while (cls != null && !cls.equals(Object.class)) {
+            try {
+                java.lang.reflect.Field f = cls.getDeclaredField(fieldName);
+                f.setAccessible(true);
+                Object v = f.get(obj);
+                return v != null ? v.toString() : "";
+            } catch (NoSuchFieldException ignored) {
+                cls = cls.getSuperclass();
+            } catch (Exception e) {
+                return "";
+            }
+        }
+        return "";
+    }
 
     private static String fieldStr(Class<?> cls, Object obj, String fieldName) {
         try {
