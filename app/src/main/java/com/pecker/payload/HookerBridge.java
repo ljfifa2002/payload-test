@@ -1729,9 +1729,13 @@ public class HookerBridge {
         });
     }
 
-    // Set to true once a valid mini_launch (appId starts with "wx") has been sent
-    // so we never send duplicates for the same appbrand process lifetime.
+    // Two-level send state for mini_launch:
+    // g_mini_launch_sent  = true once any valid mini_launch has been sent (appId starts "wx").
+    // g_mini_launch_full  = true once a mini_launch WITH iconUrl has been sent.
+    // This lets the backup path (Pattern A, no iconUrl) fire first if it wins the race,
+    // and still allows the main path (Pattern B, full data) to send an upgrade later.
     private volatile boolean g_mini_launch_sent = false;
+    private volatile boolean g_mini_launch_full  = false;
 
     // Called by C++ LSPlant after it hooks AppBrandRuntime.m0.
     // args = {thiz, AppBrandInitConfig}
@@ -1961,11 +1965,18 @@ public class HookerBridge {
         return end > start ? s.substring(start, end) : "";
     }
 
-    // Send a mini_launch message and mark g_mini_launch_sent so it fires only once.
+    // Send a mini_launch message with two-level dedup:
+    //   - If icon is non-empty  → "full" send; skip any future call (g_mini_launch_full).
+    //   - If icon is empty      → "partial" send; still allow a later full send to upgrade.
+    //   - If already sent full  → skip always.
+    //   - If already sent partial and this is also partial → skip (avoid spam).
     private void sendMiniLaunch(String appId, String brand, String icon,
                                 String username, String ver) {
-        if (g_mini_launch_sent) return;
+        boolean hasFull = !icon.isEmpty();
+        if (g_mini_launch_full) return;           // already sent complete data
+        if (g_mini_launch_sent && !hasFull) return; // already sent partial, this is also partial
         g_mini_launch_sent = true;
+        if (hasFull) g_mini_launch_full = true;
         String json = "{\"type\":\"mini_launch\""
             + ",\"appId\":\""           + jsonEscape(appId)    + "\""
             + ",\"brandName\":\""       + jsonEscape(brand)    + "\""
@@ -1977,7 +1988,7 @@ public class HookerBridge {
             + ",\"username\":\""        + jsonEscape(username) + "\""
             + ",\"timestamp\":"         + System.currentTimeMillis()
             + "}";
-        Log.i(TAG, "mini_launch: " + json);
+        Log.i(TAG, "mini_launch(" + (hasFull ? "full" : "partial") + "): " + json);
         SocketChannel.send(json);
     }
 
