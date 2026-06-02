@@ -2046,11 +2046,6 @@ public class HookerBridge {
         while (cls != null && !cls.equals(Object.class)) {
             for (java.lang.reflect.Field f : cls.getDeclaredFields()) {
                 try {
-        if (obj == null) return null;
-        Class<?> cls = obj.getClass();
-        while (cls != null && !cls.equals(Object.class)) {
-            for (java.lang.reflect.Field f : cls.getDeclaredFields()) {
-                try {
                     f.setAccessible(true);
                     Object val = f.get(obj);
                     if (val == null) continue;
