@@ -19,7 +19,7 @@
 
 // Bumped on every pushed commit so logcat immediately reveals which binary is deployed.
 // Format: YYYY.MM.DD-<short-hash>
-#define PAYLOAD_VERSION "2026.06.02-deopt-caller"
+#define PAYLOAD_VERSION "2026.06.02-smart-hook"
 
 // should_activate decides whether payload hooks should be installed in the
 // current process.
@@ -74,18 +74,39 @@ static bool should_activate() {
 }
 
 static void* proxy_hook(void* target, void* hooker) {
-    // XLoader verifies libart.so code-byte integrity. shadowhook_hook_func_addr
-    // would patch libart.so function prologues, triggering the check.
-    // Instead, return target itself as the "original" — lsplant::Init sees a
-    // non-null return and considers its internal hooks "installed", but no code
-    // bytes in libart.so are modified. LSPlant will dispatch solely via
-    // ArtMethod entry_point_from_quick_compiled_code_ replacement, which XLoader
-    // does not check in this path.
-    (void)hooker;
-    return target;
+    // XLoader verifies libart.so code-byte integrity, so we must not patch
+    // function prologues that live inside libart.so.
+    //
+    // However, for JIT-compiled WeChat methods (e.g. jsapi.m.q0, AppBrandRuntime.i)
+    // the entry_point is in the JIT code cache, not in libart.so. XLoader does not
+    // protect the JIT cache. Callers of such methods use JIT direct calls that
+    // bypass ArtMethod entry_point entirely — so a pure entry_point replacement
+    // (the LSPlant default when inline_hooker returns target) is invisible to them.
+    //
+    // Strategy: use dladdr() to check whether target is inside libart.so.
+    //   • If yes → no-op (return target): libart.so is XLoader-protected; cross-image
+    //     calls from WeChat JIT always go through ArtMethod dispatch anyway, so the
+    //     LSPlant entry_point replacement is sufficient.
+    //   • If no  → use shadowhook to patch the code bytes: safe for JIT cache and
+    //     other .so files; ensures all callers (including JIT direct calls) are
+    //     intercepted.
+    Dl_info info;
+    if (dladdr(target, &info) && info.dli_fname
+            && strstr(info.dli_fname, "libart.so") != nullptr) {
+        // Inside libart.so — must not patch code bytes.
+        (void)hooker;
+        return target;
+    }
+    // JIT code cache or another .so — safe to patch with shadowhook.
+    void* orig = nullptr;
+    shadowhook_hook_func_addr(target, hooker, &orig);
+    return orig ? orig : target;
 }
 
 static bool proxy_unhook(void* func) {
+    // For libart.so targets proxy_hook was a no-op, nothing to unhook.
+    // For JIT/other targets shadowhook manages its own stubs; we don't unhook
+    // individually here (LSPlant calls this only during UnHook which we don't use).
     (void)func;
     return true;
 }
