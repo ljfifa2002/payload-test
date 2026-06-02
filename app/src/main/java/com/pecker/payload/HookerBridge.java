@@ -1752,9 +1752,6 @@ public class HookerBridge {
         }
         return null;
     }
-        }
-        return null;
-    }
 
     // Called by C++ LSPlant after it hooks jsapi_g.q0.
     // args = {thiz, String apiName, String data, String callbackId, int, boolean, c0, int}
