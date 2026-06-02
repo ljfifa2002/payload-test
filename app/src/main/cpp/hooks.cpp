@@ -1,4 +1,5 @@
 #include "hooks.h"
+#include "art_hooks.h"
 #include <jni.h>
 #include <android/log.h>
 #include <functional>
@@ -213,6 +214,27 @@ static jobject JNICALL native_hook_method(JNIEnv* env, jclass /*cls*/,
     if (!target_method || !hooker_obj || !callback_method) {
         LOGE("hookNative: null argument passed");
         return nullptr;
+    }
+    // Prevent ART JIT from compiling (or re-compiling) the target method after
+    // lsplant::Hook() replaces its entry_point.  Without this, the JIT background
+    // thread compiles the method a few seconds after the first call and overwrites
+    // LSPlant's dispatch stub, silently disabling the hook.
+    //
+    // kAccCompileDontBother (0x02000000) is an ArtMethod access_flags bit that
+    // tells the JIT profiling system to never schedule this method for compilation.
+    // access_flags_ is always at (entry_point_offset - 28) within ArtMethod*.
+    // g_ep_offset is calibrated by art_hooks.cpp (default 32, Oplus devices may differ).
+    {
+        jmethodID mid = env->FromReflectedMethod(target_method);
+        if (mid) {
+            auto* am = reinterpret_cast<uint8_t*>(mid);
+            int flags_offset = g_ep_offset - 28;  // standard: 32-28=4
+            auto* flags = reinterpret_cast<uint32_t*>(am + flags_offset);
+            constexpr uint32_t kAccCompileDontBother = 0x02000000u;
+            *flags |= kAccCompileDontBother;
+            LOGI("hookNative: set kAccCompileDontBother on method (flags_offset=%d flags=0x%08x)",
+                 flags_offset, *flags);
+        }
     }
     jobject backup = lsplant::Hook(env, target_method, hooker_obj, callback_method);
     if (!backup) LOGE("hookNative: lsplant::Hook returned null");

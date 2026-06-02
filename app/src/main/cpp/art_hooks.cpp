@@ -44,7 +44,7 @@
 // We calibrate by scanning for the first 8-byte-aligned offset whose value
 // looks like a valid executable code pointer (verified via /proc/self/maps).
 
-static int g_ep_offset = 32;
+int g_ep_offset = 32;
 
 // Parse /proc/self/maps and collect [start, end) ranges that are executable.
 struct ExecRange { uintptr_t start, end; };

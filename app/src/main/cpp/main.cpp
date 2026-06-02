@@ -19,7 +19,7 @@
 
 // Bumped on every pushed commit so logcat immediately reveals which binary is deployed.
 // Format: YYYY.MM.DD-<short-hash>
-#define PAYLOAD_VERSION "2026.06.02-probe-hook"
+#define PAYLOAD_VERSION "2026.06.02-no-jit"
 
 // should_activate decides whether payload hooks should be installed in the
 // current process.
