@@ -19,7 +19,7 @@
 
 // Bumped on every pushed commit so logcat immediately reveals which binary is deployed.
 // Format: YYYY.MM.DD-<short-hash>
-#define PAYLOAD_VERSION "2026.06.02-smart-hook"
+#define PAYLOAD_VERSION "2026.06.02-probe-hook"
 
 // should_activate decides whether payload hooks should be installed in the
 // current process.
@@ -91,15 +91,18 @@ static void* proxy_hook(void* target, void* hooker) {
     //     other .so files; ensures all callers (including JIT direct calls) are
     //     intercepted.
     Dl_info info;
-    if (dladdr(target, &info) && info.dli_fname
-            && strstr(info.dli_fname, "libart.so") != nullptr) {
-        // Inside libart.so — must not patch code bytes.
+    int dl_ret = dladdr(target, &info);
+    const char* fname = (dl_ret && info.dli_fname) ? info.dli_fname : "(anon/JIT)";
+    if (dl_ret && info.dli_fname && strstr(info.dli_fname, "libart.so") != nullptr) {
+        LOGI("proxy_hook: target=%p libart.so → no-op", target);
         (void)hooker;
         return target;
     }
     // JIT code cache or another .so — safe to patch with shadowhook.
     void* orig = nullptr;
-    shadowhook_hook_func_addr(target, hooker, &orig);
+    void* stub = shadowhook_hook_func_addr(target, hooker, &orig);
+    LOGI("proxy_hook: target=%p fname=%s → shadowhook stub=%p orig=%p errno=%d",
+         target, fname, stub, orig, shadowhook_get_errno());
     return orig ? orig : target;
 }
 
