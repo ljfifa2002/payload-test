@@ -1769,6 +1769,7 @@ public class HookerBridge {
     // args = {thiz, String apiName, String data, String callbackId, int, boolean, c0, int}
     // Set to true after the first hookJsapiQ0 field dump so we only log once.
     private volatile boolean g_jsapi_fields_dumped = false;
+    private volatile boolean g_runtime_fields_dumped = false;
 
     public Method backupJsapiQ0;
     public Object hookJsapiQ0(Object[] args) {
@@ -1811,6 +1812,12 @@ public class HookerBridge {
             try {
                 Object runtime = fieldObjectInHierarchy(args[0], "D");
                 if (runtime != null) {
+                    // One-shot: dump full field hierarchy of AppBrandRuntime (m6/WC)
+                    // so we can see where iconUrl / config is stored.
+                    if (!g_runtime_fields_dumped) {
+                        g_runtime_fields_dumped = true;
+                        dumpObjectFields("appbrand_runtime_fields", runtime);
+                    }
                     String[] info = parseMiniLaunchInfo(runtime.toString());
                     if (info != null) {
                         sendMiniLaunch(info[0], info[1], info[2], info[3], info[4]);
@@ -1929,6 +1936,66 @@ public class HookerBridge {
     }
 
     // ---- Helpers for WeChat mini-program hooks ----
+
+    // Dump the full declared-field hierarchy of obj to logcat under the given tag.
+    // For each class level: prints every field name, declared type, and runtime value
+    // (trimmed to 120 chars). Non-String/primitive object fields are also expanded
+    // one level deeper so nested config objects are visible.
+    private static void dumpObjectFields(String tag, Object obj) {
+        if (obj == null) { Log.i(TAG, tag + ": null"); return; }
+        StringBuilder sb = new StringBuilder(tag + ": class=" + obj.getClass().getName());
+        Class<?> cls = obj.getClass();
+        while (cls != null && !cls.equals(Object.class)) {
+            sb.append(" [").append(cls.getSimpleName()).append(": ");
+            for (java.lang.reflect.Field f : cls.getDeclaredFields()) {
+                try {
+                    f.setAccessible(true);
+                    Object val = f.get(obj);
+                    String typeName = f.getType().getSimpleName();
+                    sb.append(f.getName()).append('(').append(typeName).append(')');
+                    if (val == null) {
+                        sb.append("=null ");
+                        continue;
+                    }
+                    String valStr = val.toString();
+                    if (valStr.length() > 120) valStr = valStr.substring(0, 120) + "…";
+                    sb.append('=').append(valStr).append(' ');
+                    // Expand one level for non-String object fields to see nested config
+                    if (!(val instanceof String) && !(val instanceof Number)
+                            && !(val instanceof Boolean) && !f.getType().isArray()
+                            && !val.getClass().getName().startsWith("java.util")) {
+                        sb.append("{");
+                        Class<?> innerCls = val.getClass();
+                        while (innerCls != null && !innerCls.equals(Object.class)) {
+                            for (java.lang.reflect.Field fi : innerCls.getDeclaredFields()) {
+                                try {
+                                    fi.setAccessible(true);
+                                    Object iv = fi.get(val);
+                                    sb.append(fi.getName()).append('(')
+                                      .append(fi.getType().getSimpleName()).append(')');
+                                    if (iv != null) {
+                                        String ivs = iv.toString();
+                                        if (ivs.length() > 80) ivs = ivs.substring(0, 80) + "…";
+                                        sb.append('=').append(ivs);
+                                    }
+                                    sb.append(' ');
+                                } catch (Exception ignored) {}
+                            }
+                            innerCls = innerCls.getSuperclass();
+                        }
+                        sb.append("} ");
+                    }
+                } catch (Exception ignored) {}
+            }
+            sb.append(']');
+            cls = cls.getSuperclass();
+        }
+        // Split into chunks ≤ 3000 chars to avoid logcat truncation
+        String out = sb.toString();
+        for (int i = 0; i < out.length(); i += 3000) {
+            Log.i(TAG, out.substring(i, Math.min(i + 3000, out.length())));
+        }
+    }
 
     // Parse mini_launch fields from known WeChat toString() patterns.
     // Returns String[]{appId, brandName, iconUrl, username, version} or null if
