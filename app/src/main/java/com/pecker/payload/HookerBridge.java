@@ -1668,7 +1668,13 @@ public class HookerBridge {
                 if (backup instanceof java.lang.reflect.Method) {
                     inst.backupXf1QQ = (java.lang.reflect.Method) backup;
                     installed++;
-                    Log.i(TAG, "mini_hooks: xf1.q.q hooked → mini_request send");
+                    // Log actual param count and types to confirm correct overload was hooked
+                    StringBuilder sig = new StringBuilder("mini_hooks: xf1.q.q hooked params=");
+                    sig.append(targetQ.getParameterTypes().length).append(" [");
+                    for (Class<?> t : targetQ.getParameterTypes())
+                        sig.append(t.getSimpleName()).append(',');
+                    sig.append(']');
+                    Log.i(TAG, sig.toString());
                 } else {
                     Log.w(TAG, "mini_hooks: xf1.q.q hookNative returned null");
                 }
@@ -1683,7 +1689,12 @@ public class HookerBridge {
                 if (backup instanceof java.lang.reflect.Method) {
                     inst.backupXf1QD = (java.lang.reflect.Method) backup;
                     installed++;
-                    Log.i(TAG, "mini_hooks: xf1.q.d hooked → mini_request recv");
+                    StringBuilder sig2 = new StringBuilder("mini_hooks: xf1.q.d hooked params=");
+                    sig2.append(targetD.getParameterTypes().length).append(" [");
+                    for (Class<?> t : targetD.getParameterTypes())
+                        sig2.append(t.getSimpleName()).append(',');
+                    sig2.append(']');
+                    Log.i(TAG, sig2.toString());
                 } else {
                     Log.w(TAG, "mini_hooks: xf1.q.d hookNative returned null");
                 }
@@ -1787,7 +1798,6 @@ public class HookerBridge {
     public Object hookXf1QQ(Object[] args) {
         if (backupXf1QQ != null) {
             try {
-                // args[0]=thiz, args[1..n-1]=method params
                 Object[] reflArgs = java.util.Arrays.copyOfRange(args, 1, args.length);
                 backupXf1QQ.invoke(args[0], reflArgs);
             } catch (Exception e) { Log.e(TAG, "backup invoke object failed: " + e); }
@@ -1796,10 +1806,14 @@ public class HookerBridge {
             int n = args.length;
             String apiName = n >= 2 && args[n-1] != null ? args[n-1].toString() : "";
             String taskId  = n >= 3 && args[n-2] != null ? args[n-2].toString() : "";
+            // Always log: confirms hook fires + shows actual arg structure
+            Log.i(TAG, "hookXf1QQ: args=" + n + " apiName=" + apiName + " taskId=" + taskId);
             if ("createRequestTask".equals(apiName) && !taskId.isEmpty()) {
                 String params  = n >= 4 ? safeJson(args[3]) : "";
                 String headers = n >= 5 ? safeJson(args[4]) : "";
                 wxPendingRequests.put(taskId, new String[]{params, headers});
+                String url = extractJsonField(params, "url");
+                Log.i(TAG, "hookXf1QQ: pending taskId=" + taskId + " url=" + url);
             }
         } catch (Exception e) {
             Log.w(TAG, "hookXf1QQ failed: " + e);
@@ -1815,14 +1829,17 @@ public class HookerBridge {
             safeInvokeObject(backupXf1QD, args[0], args[1], args[2],
                               args[3], args[4], args[5], args[6], args[7], args[8], args[9]);
         try {
-            String taskId = args[6] != null ? args[6].toString() : "";
+            int n = args.length;
+            String taskId = n > 6 && args[6] != null ? args[6].toString() : "";
             String[] req  = wxPendingRequests.remove(taskId);
+            int code      = n > 4 && args[4] != null ? ((Number) args[4]).intValue() : -1;
+            String body   = n > 3 && args[3] != null ? args[3].toString() : "";
+            // Always log: confirms hook fires + shows whether pending matched
+            Log.i(TAG, "hookXf1QD: args=" + n + " taskId=" + taskId
+                    + " code=" + code + " bodyLen=" + body.length()
+                    + " pendingMatch=" + (req != null));
             if (req != null) {
                 String params  = req[0];
-                String status  = args[2] != null ? args[2].toString() : "";
-                int    code    = args[4] != null ? ((Number) args[4]).intValue() : -1;
-                String body    = args[3] != null ? args[3].toString() : "";
-
                 // Extract url / method from params JSON
                 String url    = extractJsonField(params, "url");
                 String method = extractJsonField(params, "method");
