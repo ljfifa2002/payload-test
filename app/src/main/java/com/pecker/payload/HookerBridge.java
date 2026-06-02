@@ -1743,13 +1743,21 @@ public class HookerBridge {
     public Object hookAppBrandRuntimeM0(Object[] args) {
         if (backupAppBrandRuntimeM0 != null)
             safeInvokeObject(backupAppBrandRuntimeM0, args[0], args[1], args[2]);
-        if (g_mini_launch_sent || args[1] == null) return null;
+        if (g_mini_launch_full || args[1] == null) return null;
         try {
-            // Approach: parse known toString() patterns rather than guessing field names.
-            // The hook fires on multiple overloads; only two produce valid launch data.
+            // Pass 1: toString() pattern matching (Pattern A / B) — fast, zero reflection.
             String[] info = parseMiniLaunchInfo(args[1].toString());
             if (info != null) {
                 sendMiniLaunch(info[0], info[1], info[2], info[3], info[4]);
+            }
+            // Pass 2: value-pattern field scan — works without knowing class name or field
+            // names. Fires on a WeChat thread so args[1].getClass() has the correct CL.
+            // Runs only when we still need iconUrl (g_mini_launch_full still false).
+            if (!g_mini_launch_full) {
+                String[] scanned = scanByValuePattern(args[1]);
+                if (scanned != null) {
+                    sendMiniLaunch(scanned[0], scanned[1], scanned[2], scanned[3], scanned[4]);
+                }
             }
         } catch (Exception e) {
             Log.w(TAG, "hookAppBrandRuntimeM0 failed: " + e);
@@ -2038,6 +2046,11 @@ public class HookerBridge {
         while (cls != null && !cls.equals(Object.class)) {
             for (java.lang.reflect.Field f : cls.getDeclaredFields()) {
                 try {
+        if (obj == null) return null;
+        Class<?> cls = obj.getClass();
+        while (cls != null && !cls.equals(Object.class)) {
+            for (java.lang.reflect.Field f : cls.getDeclaredFields()) {
+                try {
                     f.setAccessible(true);
                     Object val = f.get(obj);
                     if (val == null) continue;
@@ -2049,6 +2062,50 @@ public class HookerBridge {
                 } catch (Exception ignored) {}
             }
             cls = cls.getSuperclass();
+        }
+        return null;
+    }
+
+    // Scan all String fields of obj and its superclass chain, matching by VALUE
+    // pattern to extract mini_launch fields without knowing class or field names.
+    // The hook fires on a WeChat thread, so obj.getClass() has the correct CL.
+    //
+    // Patterns:
+    //   appId    — starts with "wx", length > 10
+    //   iconUrl  — starts with "http://wx.qlogo.cn" or "https://wx.qlogo.cn"
+    //   username — starts with "gh_"
+    //   brandName — non-empty, does not start with any of the above
+    //
+    // Returns String[]{appId, brandName, iconUrl, username, ""} when appId found,
+    // null otherwise.
+    private static String[] scanByValuePattern(Object obj) {
+        if (obj == null) return null;
+        String appId = "", brand = "", icon = "", username = "";
+        Class<?> cls = obj.getClass();
+        while (cls != null && !cls.equals(Object.class)) {
+            for (java.lang.reflect.Field f : cls.getDeclaredFields()) {
+                if (f.getType() != String.class) continue;
+                try {
+                    f.setAccessible(true);
+                    String v = (String) f.get(obj);
+                    if (v == null || v.isEmpty()) continue;
+                    if (appId.isEmpty() && v.startsWith("wx") && v.length() > 10
+                            && !v.contains(" ") && !v.contains("/")) {
+                        appId = v;
+                    } else if (icon.isEmpty()
+                            && (v.startsWith("http://wx.qlogo.cn")
+                             || v.startsWith("https://wx.qlogo.cn"))) {
+                        icon = v;
+                    } else if (username.isEmpty() && v.startsWith("gh_")) {
+                        username = v;
+                    }
+                } catch (Exception ignored) {}
+            }
+            cls = cls.getSuperclass();
+        }
+        if (appId.startsWith("wx")) {
+            Log.i(TAG, "scanByValuePattern: appId=" + appId + " icon=" + icon + " user=" + username);
+            return new String[]{appId, brand, icon, username, ""};
         }
         return null;
     }
