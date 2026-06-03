@@ -127,6 +127,7 @@ static jobject create_hooker(JNIEnv* env, jclass hooker_class) {
 // backup_field: name of backup Method field on HookerBridge
 // is_static: whether target method is static
 // use_app_cl: look up target class via app classloader (for app-bundled libs like OkHttp3)
+// optional: if true, a missing method is logged at INFO level instead of ERROR (API version gaps)
 static void hook_one(JNIEnv* env,
                      jobject hooker_obj,
                      jclass hooker_class,
@@ -137,7 +138,8 @@ static void hook_one(JNIEnv* env,
                      const char* callback_sig,
                      const char* backup_field,
                      bool is_static,
-                     bool use_app_cl = false) {
+                     bool use_app_cl = false,
+                     bool optional = false) {
     // --- get target class ---
     jclass target_class = use_app_cl
         ? find_app_class(env, target_class_name)
@@ -163,7 +165,11 @@ static void hook_one(JNIEnv* env,
     } else {
         jmethodID mid = env->GetMethodID(target_class, target_method_name, target_sig);
         if (check_exception(env, target_method_name) || mid == nullptr) {
-            LOGE("hooks: GetMethodID failed: %s %s", target_method_name, target_sig);
+            if (optional) {
+                LOGI("hooks: method not found (optional): %s %s", target_method_name, target_sig);
+            } else {
+                LOGE("hooks: GetMethodID failed: %s %s", target_method_name, target_sig);
+            }
             return;
         }
         target_method = env->ToReflectedMethod(target_class, mid, JNI_FALSE);
@@ -387,12 +393,14 @@ void install_device_id_hooks(JNIEnv* env) {
     hook_one(env, hooker_obj, hooker_class,
         "android/location/LocationManager", "requestLocationUpdates",
         "(Landroid/location/Criteria;JFLandroid/location/LocationListener;)V",
-        "hookRequestLocationUpdatesCriteria", kCbSig, "backupRequestLocationUpdatesCriteria", false);
+        "hookRequestLocationUpdatesCriteria", kCbSig, "backupRequestLocationUpdatesCriteria", false,
+        false, true);
 
     hook_one(env, hooker_obj, hooker_class,
         "android/location/LocationManager", "requestLocationUpdates",
         "(Landroid/location/Criteria;JFLandroid/location/LocationListener;Landroid/os/Looper;)V",
-        "hookRequestLocationUpdatesCriteriaLooper", kCbSig, "backupRequestLocationUpdatesCriteriaLooper", false);
+        "hookRequestLocationUpdatesCriteriaLooper", kCbSig, "backupRequestLocationUpdatesCriteriaLooper", false,
+        false, true);
 
 
     hook_one(env, hooker_obj, hooker_class,
