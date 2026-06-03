@@ -19,7 +19,7 @@
 
 // Bumped on every pushed commit so logcat immediately reveals which binary is deployed.
 // Format: YYYY.MM.DD-<short-hash>
-#define PAYLOAD_VERSION "2026.06.02-runtime-dump"
+#define PAYLOAD_VERSION "2026.06.03-android15-lsplant"
 
 // should_activate decides whether payload hooks should be installed in the
 // current process.
@@ -159,11 +159,19 @@ static void payload_init() {
     }
 
     void* libart = shadowhook_dlopen("libart.so");
+    // On Android 15, libart.so's .symtab section is stripped; shadowhook_dlsym_symtab
+    // only searches .symtab and returns NULL for all symbols. Fall back to dlsym()
+    // which searches .dynsym — present on all Android versions.
+    void* libart_dl = dlopen("libart.so", RTLD_NOLOAD);
     lsplant::InitInfo info{
         .inline_hooker = proxy_hook,
         .inline_unhooker = proxy_unhook,
-        .art_symbol_resolver = [libart](std::string_view symbol) -> void* {
-            return shadowhook_dlsym_symtab(libart, std::string(symbol).c_str());
+        .art_symbol_resolver = [libart, libart_dl](std::string_view symbol) -> void* {
+            void* result = shadowhook_dlsym_symtab(libart, std::string(symbol).c_str());
+            if (!result && libart_dl) {
+                result = dlsym(libart_dl, std::string(symbol).c_str());
+            }
+            return result;
         },
     };
     bool lsp_ok = lsplant::Init(env, info);
