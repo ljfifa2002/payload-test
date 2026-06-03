@@ -26,32 +26,14 @@ jobs:
       - name: Grant Gradle wrapper execute permission
         run: chmod +x gradlew
 
-      - name: Extract LSPlant 6.4 (headers + libraries for both ABIs)
+      - name: Verify LSPlant libraries (committed to repo, no download needed)
         run: |
-          curl -sL "https://repo1.maven.org/maven2/org/lsposed/lsplant/lsplant-standalone/6.4/lsplant-standalone-6.4.aar" \
-            -o /tmp/lsplant6.aar
-
-          # Headers — needed by CMake at configure time (shared across ABIs)
-          mkdir -p app/src/main/cpp/lsplant/include
-          unzip -p /tmp/lsplant6.aar \
-            prefab/modules/lsplant/include/lsplant.hpp \
-            > app/src/main/cpp/lsplant/include/lsplant.hpp
-
-          # arm64-v8a library
-          mkdir -p app/src/main/jniLibs/arm64-v8a
-          unzip -p /tmp/lsplant6.aar \
-            prefab/modules/lsplant/libs/android.arm64-v8a/liblsplant.so \
-            > app/src/main/jniLibs/arm64-v8a/liblsplant.so
-
-          # armeabi-v7a library
-          mkdir -p app/src/main/jniLibs/armeabi-v7a
-          unzip -p /tmp/lsplant6.aar \
-            prefab/modules/lsplant/libs/android.armeabi-v7a/liblsplant.so \
-            > app/src/main/jniLibs/armeabi-v7a/liblsplant.so
-
-          echo "LSPlant header: $(wc -c < app/src/main/cpp/lsplant/include/lsplant.hpp) bytes"
+          # liblsplant.so for both ABIs are committed directly to jniLibs/
+          # (custom build with Android 15 DoCollection fix, replacing Maven Central 6.4)
           echo "LSPlant arm64: $(wc -c < app/src/main/jniLibs/arm64-v8a/liblsplant.so) bytes"
           echo "LSPlant arm32: $(wc -c < app/src/main/jniLibs/armeabi-v7a/liblsplant.so) bytes"
+          # lsplant.hpp header is also committed under app/src/main/cpp/lsplant/include/
+          echo "LSPlant header: $(wc -c < app/src/main/cpp/lsplant/include/lsplant.hpp) bytes"
 
       - name: Build release
         run: ./gradlew assembleRelease
