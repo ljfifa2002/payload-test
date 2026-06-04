@@ -201,6 +201,8 @@ public class HookerBridge {
     public Method backupFileOutputStreamFile;
     public Method backupFileOutputStreamFileAppend;
     public Method backupTencentLocationStart;
+    // Phase 11: WebView privacy policy URL capture
+    public Method backupWebViewLoadUrl;
 
     // LSPlant 6.4 calls the hooker as a virtual (instance) method:
     //   hookerInstance.hookXxx(Object[] args)
@@ -319,6 +321,37 @@ public class HookerBridge {
         String json = sb.toString();
         Log.i(TAG, json);
         SocketChannel.send(json);
+    }
+
+    private static boolean looksLikePrivacyPolicy(String url) {
+        if (url == null) return false;
+        String lower = url.toLowerCase();
+        return lower.contains("privacy")
+            || lower.contains("policy")
+            || lower.contains("agreement")
+            || lower.contains("隐私")
+            || lower.contains("协议")
+            || lower.contains("privacypolicy")
+            || lower.contains("privacy_policy")
+            || lower.contains("useragreement")
+            || lower.contains("user_agreement");
+    }
+
+    private static void logPrivacyPolicyUrl(String url) {
+        String json = "{\"type\":\"webview_privacy_url\""
+                + ",\"url\":\"" + jsonEscape(url) + "\""
+                + ",\"timestamp\":" + System.currentTimeMillis() + "}";
+        Log.i(TAG, "privacy_policy_url: " + url);
+        SocketChannel.send(json);
+    }
+
+    // WebView.loadUrl(String url)  instance: args={thiz, url}
+    public Object hookWebViewLoadUrl(Object[] args) {
+        String url = args.length > 1 ? (String) args[1] : null;
+        if (looksLikePrivacyPolicy(url)) {
+            logPrivacyPolicyUrl(url);
+        }
+        return safeInvokeObject(backupWebViewLoadUrl, args[0], url);
     }
 
     // ---- Instance hook callbacks ([Ljava/lang/Object;)Ljava/lang/Object; ----
