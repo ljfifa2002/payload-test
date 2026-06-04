@@ -351,13 +351,15 @@ public class HookerBridge {
     }
 
     // WebView.loadUrl(String url)  instance: args={thiz, url}
-    // Store WebView→URL mapping unconditionally; title recognition decides later.
-    // Handles both system android.webkit.WebView and TBS com.tencent.smtt.sdk.WebView.
+    // Report every WebView URL load as webview_privacy_url so pecker-agent can
+    // pick the last URL before the privacy_policy command arrives.
+    // No keyword filtering here — the agent uses the command timestamp to select
+    // the correct URL (the page the user had open when they clicked "get").
     public Object hookWebViewLoadUrl(Object[] args) {
         String url = args.length > 1 ? (String) args[1] : null;
-        if (url != null && !url.isEmpty()) {
+        if (url != null && !url.isEmpty() && url.startsWith("http")) {
             webViewUrlMap.put(args[0], url);
-            Log.i(TAG, "webview_loadUrl class=" + args[0].getClass().getName() + " url=" + url);
+            logPrivacyPolicyUrl(url);
         }
         return safeInvokeObject(backupWebViewLoadUrl, args[0], url);
     }
@@ -365,15 +367,16 @@ public class HookerBridge {
     // TBS WebView.loadUrl — same logic, different backup field.
     public Object hookTbsWebViewLoadUrl(Object[] args) {
         String url = args.length > 1 ? (String) args[1] : null;
-        if (url != null && !url.isEmpty()) {
+        if (url != null && !url.isEmpty() && url.startsWith("http")) {
             webViewUrlMap.put(args[0], url);
-            Log.i(TAG, "tbs_webview_loadUrl class=" + args[0].getClass().getName() + " url=" + url);
+            logPrivacyPolicyUrl(url);
         }
         return safeInvokeObject(backupTbsWebViewLoadUrl, args[0], url);
     }
 
-    // WebChromeClient.onReceivedTitle(WebView view, String title)
-    // instance: args={thiz (WebChromeClient), view (WebView), title (String)}
+    // WebChromeClient.onReceivedTitle — kept as supplementary; emits the URL
+    // again when title matches so duplicate entries pose no problem (agent takes
+    // the last-before-cmdTime entry regardless).
     public Object hookOnReceivedTitle(Object[] args) {
         if (args.length >= 3) {
             Object view  = args[1];
@@ -382,8 +385,6 @@ public class HookerBridge {
                 String url = webViewUrlMap.get(view);
                 if (url != null) {
                     logPrivacyPolicyUrl(url);
-                } else {
-                    Log.i(TAG, "privacy_title matched but no url cached: " + title);
                 }
             }
         }
@@ -391,7 +392,7 @@ public class HookerBridge {
             args[0], args.length > 1 ? args[1] : null, args.length > 2 ? args[2] : null);
     }
 
-    // TBS WebChromeClient.onReceivedTitle — same logic, different backup field.
+    // TBS WebChromeClient.onReceivedTitle — supplementary, same as system version.
     public Object hookTbsOnReceivedTitle(Object[] args) {
         if (args.length >= 3) {
             Object view  = args[1];
@@ -400,8 +401,6 @@ public class HookerBridge {
                 String url = webViewUrlMap.get(view);
                 if (url != null) {
                     logPrivacyPolicyUrl(url);
-                } else {
-                    Log.i(TAG, "tbs_privacy_title matched but no url cached: " + title);
                 }
             }
         }
