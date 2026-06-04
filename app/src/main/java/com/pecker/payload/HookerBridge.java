@@ -327,14 +327,7 @@ public class HookerBridge {
         if (url == null) return false;
         String lower = url.toLowerCase();
         return lower.contains("privacy")
-            || lower.contains("policy")
-            || lower.contains("agreement")
-            || lower.contains("隐私")
-            || lower.contains("协议")
-            || lower.contains("privacypolicy")
-            || lower.contains("privacy_policy")
-            || lower.contains("useragreement")
-            || lower.contains("user_agreement");
+            || lower.contains("隐私");
     }
 
     private static void logPrivacyPolicyUrl(String url) {
