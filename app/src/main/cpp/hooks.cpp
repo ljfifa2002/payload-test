@@ -710,5 +710,18 @@ void install_device_id_hooks(JNIEnv* env) {
         "hookOnReceivedTitle", kCbSig, "backupWebChromeClientOnReceivedTitle", false,
         false, true); // optional
 
+    // TBS X5 WebView equivalents — loaded via app classloader (use_app_cl=true).
+    // Some apps embed Tencent TBS SDK which replaces system WebView entirely.
+    hook_one(env, hooker_obj, hooker_class,
+        "com/tencent/smtt/sdk/WebView", "loadUrl", "(Ljava/lang/String;)V",
+        "hookTbsWebViewLoadUrl", kCbSig, "backupTbsWebViewLoadUrl", false,
+        true, true); // use_app_cl=true, optional
+
+    hook_one(env, hooker_obj, hooker_class,
+        "com/tencent/smtt/sdk/WebChromeClient", "onReceivedTitle",
+        "(Lcom/tencent/smtt/sdk/WebView;Ljava/lang/String;)V",
+        "hookTbsOnReceivedTitle", kCbSig, "backupTbsWebChromeClientOnReceivedTitle", false,
+        true, true); // use_app_cl=true, optional
+
     LOGI("hooks: device id hooks installed");
 }

@@ -207,6 +207,9 @@ public class HookerBridge {
     // Phase 11: WebView privacy policy capture via title recognition
     public Method backupWebViewLoadUrl;
     public Method backupWebChromeClientOnReceivedTitle;
+    // TBS X5 WebView equivalents (com.tencent.smtt.sdk)
+    public Method backupTbsWebViewLoadUrl;
+    public Method backupTbsWebChromeClientOnReceivedTitle;
 
     // Maps each WebView instance to the last URL it loaded.
     // Looked up when onReceivedTitle fires to retrieve the URL for reporting.
@@ -349,12 +352,24 @@ public class HookerBridge {
 
     // WebView.loadUrl(String url)  instance: args={thiz, url}
     // Store WebView→URL mapping unconditionally; title recognition decides later.
+    // Handles both system android.webkit.WebView and TBS com.tencent.smtt.sdk.WebView.
     public Object hookWebViewLoadUrl(Object[] args) {
         String url = args.length > 1 ? (String) args[1] : null;
         if (url != null && !url.isEmpty()) {
             webViewUrlMap.put(args[0], url);
+            Log.i(TAG, "webview_loadUrl class=" + args[0].getClass().getName() + " url=" + url);
         }
         return safeInvokeObject(backupWebViewLoadUrl, args[0], url);
+    }
+
+    // TBS WebView.loadUrl — same logic, different backup field.
+    public Object hookTbsWebViewLoadUrl(Object[] args) {
+        String url = args.length > 1 ? (String) args[1] : null;
+        if (url != null && !url.isEmpty()) {
+            webViewUrlMap.put(args[0], url);
+            Log.i(TAG, "tbs_webview_loadUrl class=" + args[0].getClass().getName() + " url=" + url);
+        }
+        return safeInvokeObject(backupTbsWebViewLoadUrl, args[0], url);
     }
 
     // WebChromeClient.onReceivedTitle(WebView view, String title)
@@ -373,6 +388,24 @@ public class HookerBridge {
             }
         }
         return safeInvokeObject(backupWebChromeClientOnReceivedTitle,
+            args[0], args.length > 1 ? args[1] : null, args.length > 2 ? args[2] : null);
+    }
+
+    // TBS WebChromeClient.onReceivedTitle — same logic, different backup field.
+    public Object hookTbsOnReceivedTitle(Object[] args) {
+        if (args.length >= 3) {
+            Object view  = args[1];
+            String title = (String) args[2];
+            if (looksLikePrivacyTitle(title)) {
+                String url = webViewUrlMap.get(view);
+                if (url != null) {
+                    logPrivacyPolicyUrl(url);
+                } else {
+                    Log.i(TAG, "tbs_privacy_title matched but no url cached: " + title);
+                }
+            }
+        }
+        return safeInvokeObject(backupTbsWebChromeClientOnReceivedTitle,
             args[0], args.length > 1 ? args[1] : null, args.length > 2 ? args[2] : null);
     }
 
