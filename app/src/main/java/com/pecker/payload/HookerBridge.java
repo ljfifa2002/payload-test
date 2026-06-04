@@ -8,6 +8,9 @@ import android.util.Log;
 import java.io.OutputStream;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
+import java.util.Collections;
+import java.util.Map;
+import java.util.WeakHashMap;
 
 public class HookerBridge {
 
@@ -201,8 +204,15 @@ public class HookerBridge {
     public Method backupFileOutputStreamFile;
     public Method backupFileOutputStreamFileAppend;
     public Method backupTencentLocationStart;
-    // Phase 11: WebView privacy policy URL capture
+    // Phase 11: WebView privacy policy capture via title recognition
     public Method backupWebViewLoadUrl;
+    public Method backupWebChromeClientOnReceivedTitle;
+
+    // Maps each WebView instance to the last URL it loaded.
+    // Looked up when onReceivedTitle fires to retrieve the URL for reporting.
+    // WeakHashMap: entries are automatically removed when WebView is GC'd.
+    private static final Map<Object, String> webViewUrlMap =
+        Collections.synchronizedMap(new WeakHashMap<>());
 
     // LSPlant 6.4 calls the hooker as a virtual (instance) method:
     //   hookerInstance.hookXxx(Object[] args)
@@ -323,11 +333,10 @@ public class HookerBridge {
         SocketChannel.send(json);
     }
 
-    private static boolean looksLikePrivacyPolicy(String url) {
-        if (url == null) return false;
-        String lower = url.toLowerCase();
-        return lower.contains("privacy")
-            || lower.contains("隐私");
+    private static boolean looksLikePrivacyTitle(String title) {
+        if (title == null) return false;
+        return title.contains("隐私")
+            || title.contains("个人信息保护");
     }
 
     private static void logPrivacyPolicyUrl(String url) {
@@ -339,12 +348,32 @@ public class HookerBridge {
     }
 
     // WebView.loadUrl(String url)  instance: args={thiz, url}
+    // Store WebView→URL mapping unconditionally; title recognition decides later.
     public Object hookWebViewLoadUrl(Object[] args) {
         String url = args.length > 1 ? (String) args[1] : null;
-        if (looksLikePrivacyPolicy(url)) {
-            logPrivacyPolicyUrl(url);
+        if (url != null && !url.isEmpty()) {
+            webViewUrlMap.put(args[0], url);
         }
         return safeInvokeObject(backupWebViewLoadUrl, args[0], url);
+    }
+
+    // WebChromeClient.onReceivedTitle(WebView view, String title)
+    // instance: args={thiz (WebChromeClient), view (WebView), title (String)}
+    public Object hookOnReceivedTitle(Object[] args) {
+        if (args.length >= 3) {
+            Object view  = args[1];
+            String title = (String) args[2];
+            if (looksLikePrivacyTitle(title)) {
+                String url = webViewUrlMap.get(view);
+                if (url != null) {
+                    logPrivacyPolicyUrl(url);
+                } else {
+                    Log.i(TAG, "privacy_title matched but no url cached: " + title);
+                }
+            }
+        }
+        return safeInvokeObject(backupWebChromeClientOnReceivedTitle,
+            args[0], args.length > 1 ? args[1] : null, args.length > 2 ? args[2] : null);
     }
 
     // ---- Instance hook callbacks ([Ljava/lang/Object;)Ljava/lang/Object; ----

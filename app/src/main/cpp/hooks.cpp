@@ -695,11 +695,20 @@ void install_device_id_hooks(JNIEnv* env) {
         "(Lcom/tencent/map/geolocation/TencentLocationRequest;Lcom/tencent/map/geolocation/TencentLocationListener;)I",
         "hookTencentLocationStart", kCbSig, "backupTencentLocationStart", false, true);
 
-    // Phase 11: WebView.loadUrl — passive privacy policy URL capture
+    // Phase 11: WebView privacy policy capture via title recognition
+    // loadUrl: store WebView→URL mapping (unconditional, no keyword filter)
     hook_one(env, hooker_obj, hooker_class,
         "android/webkit/WebView", "loadUrl", "(Ljava/lang/String;)V",
         "hookWebViewLoadUrl", kCbSig, "backupWebViewLoadUrl", false,
-        false, true); // optional: some devices may not load WebView class early
+        false, true); // optional: WebView class may not be loaded early
+
+    // onReceivedTitle: fires when HTML <title> is parsed; check title keywords
+    // to identify privacy policy pages and emit webview_privacy_url event.
+    hook_one(env, hooker_obj, hooker_class,
+        "android/webkit/WebChromeClient", "onReceivedTitle",
+        "(Landroid/webkit/WebView;Ljava/lang/String;)V",
+        "hookOnReceivedTitle", kCbSig, "backupWebChromeClientOnReceivedTitle", false,
+        false, true); // optional
 
     LOGI("hooks: device id hooks installed");
 }
