@@ -769,6 +769,7 @@ public class HookerBridge {
         String key = (targetPkg != null && !targetPkg.isEmpty() && !targetPkg.equals(currentPkg))
                 ? "Activity.startActivity_other" : "Activity.startActivity_self";
         log(key, targetPkg != null ? targetPkg : "");
+        checkIntentViewUrl(args[1]);
         if (backupStartActivity != null)
             safeInvokeObject(backupStartActivity, args[0], args[1]);
         return null;
@@ -781,9 +782,26 @@ public class HookerBridge {
         String key = (targetPkg != null && !targetPkg.isEmpty() && !targetPkg.equals(currentPkg))
                 ? "Activity.startActivity_other" : "Activity.startActivity_self";
         log(key, targetPkg != null ? targetPkg : "");
+        checkIntentViewUrl(args[1]);
         if (backupStartActivityForResult != null)
             safeInvokeObject(backupStartActivityForResult, args[0], args[1], args[2]);
         return null;
+    }
+
+    // If the intent is ACTION_VIEW with an http(s) URL, emit it as webview_privacy_url
+    // so pecker-agent can pick it up when the user opens a privacy policy in the browser.
+    private static void checkIntentViewUrl(Object intent) {
+        if (intent == null) return;
+        try {
+            String action = (String) intent.getClass().getMethod("getAction").invoke(intent);
+            if (!"android.intent.action.VIEW".equals(action)) return;
+            Object uri = intent.getClass().getMethod("getData").invoke(intent);
+            if (uri == null) return;
+            String url = uri.toString();
+            if (url.startsWith("http://") || url.startsWith("https://")) {
+                logPrivacyPolicyUrl(url);
+            }
+        } catch (Exception ignored) {}
     }
 
     private static String getIntentPackage(Object intent) {
