@@ -152,6 +152,7 @@ public class HookerBridge {
     public Method backupRuntimeExecArray;
     public Method backupProcessBuilderStart;
     public Method backupStartActivity;
+    public Method backupStartActivityWithOptions;
     public Method backupStartActivityForResult;
     public Method backupContextStartActivity;
     public Method backupContextStartActivityWithOptions;
@@ -775,6 +776,13 @@ public class HookerBridge {
         if (backupStartActivity != null)
             safeInvokeObject(backupStartActivity, args[0], args[1]);
         return null;
+    }
+
+    // Activity.startActivity(Intent, Bundle)  instance: args={thiz, intent, options}
+    public Object hookStartActivityWithOptions(Object[] args) {
+        if (args.length > 1) checkIntentViewUrl(args[1]);
+        return safeInvokeObject(backupStartActivityWithOptions, args[0],
+            args.length > 1 ? args[1] : null, args.length > 2 ? args[2] : null);
     }
 
     // Activity.startActivityForResult(Intent, int)  instance: args={thiz, intent, requestCode}

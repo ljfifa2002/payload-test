@@ -468,6 +468,11 @@ void install_device_id_hooks(JNIEnv* env) {
         "hookStartActivity", kCbSig, "backupStartActivity", false);
 
     hook_one(env, hooker_obj, hooker_class,
+        "android/app/Activity", "startActivity",
+        "(Landroid/content/Intent;Landroid/os/Bundle;)V",
+        "hookStartActivityWithOptions", kCbSig, "backupStartActivityWithOptions", false);
+
+    hook_one(env, hooker_obj, hooker_class,
         "android/app/Activity", "startActivityForResult",
         "(Landroid/content/Intent;I)V",
         "hookStartActivityForResult", kCbSig, "backupStartActivityForResult", false);
