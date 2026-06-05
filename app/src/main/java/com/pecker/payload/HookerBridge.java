@@ -153,6 +153,8 @@ public class HookerBridge {
     public Method backupProcessBuilderStart;
     public Method backupStartActivity;
     public Method backupStartActivityForResult;
+    public Method backupContextStartActivity;
+    public Method backupContextStartActivityWithOptions;
     public Method backupMediaRecorderStart;
     public Method backupBroadcastReceiverOnReceive;
     // Phase 5
@@ -802,6 +804,21 @@ public class HookerBridge {
                 logPrivacyPolicyUrl(url);
             }
         } catch (Exception ignored) {}
+    }
+
+    // ContextWrapper.startActivity(Intent) — covers Custom Tabs and Context-level calls.
+    // instance: args={thiz, intent}
+    public Object hookContextStartActivity(Object[] args) {
+        if (args.length > 1) checkIntentViewUrl(args[1]);
+        return safeInvokeObject(backupContextStartActivity, args[0], args[1]);
+    }
+
+    // ContextWrapper.startActivity(Intent, Bundle) — two-arg variant (API 16+).
+    // instance: args={thiz, intent, options}
+    public Object hookContextStartActivityWithOptions(Object[] args) {
+        if (args.length > 1) checkIntentViewUrl(args[1]);
+        return safeInvokeObject(backupContextStartActivityWithOptions, args[0],
+            args.length > 1 ? args[1] : null, args.length > 2 ? args[2] : null);
     }
 
     private static String getIntentPackage(Object intent) {

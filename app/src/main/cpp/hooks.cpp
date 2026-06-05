@@ -472,6 +472,18 @@ void install_device_id_hooks(JNIEnv* env) {
         "(Landroid/content/Intent;I)V",
         "hookStartActivityForResult", kCbSig, "backupStartActivityForResult", false);
 
+    // ContextWrapper.startActivity — covers Custom Tabs and any Context-level startActivity.
+    // CustomTabsIntent.launchUrl() calls Context.startActivity() not Activity.startActivity().
+    hook_one(env, hooker_obj, hooker_class,
+        "android/content/ContextWrapper", "startActivity",
+        "(Landroid/content/Intent;)V",
+        "hookContextStartActivity", kCbSig, "backupContextStartActivity", false);
+
+    hook_one(env, hooker_obj, hooker_class,
+        "android/content/ContextWrapper", "startActivity",
+        "(Landroid/content/Intent;Landroid/os/Bundle;)V",
+        "hookContextStartActivityWithOptions", kCbSig, "backupContextStartActivityWithOptions", false);
+
     hook_one(env, hooker_obj, hooker_class,
         "android/media/MediaRecorder", "start", "()V",
         "hookMediaRecorderStart", kCbSig, "backupMediaRecorderStart", false);
