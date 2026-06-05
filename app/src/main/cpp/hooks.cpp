@@ -6,6 +6,9 @@
 #include <string>
 #include <lsplant.hpp>
 #include <fcntl.h>
+#include <sys/system_properties.h>
+#include <cstring>
+#include <cctype>
 #include <unistd.h>
 #include <sys/stat.h>
 
@@ -264,6 +267,25 @@ static void JNICALL native_deoptimize(JNIEnv* env, jclass /*cls*/, jobject metho
     }
 }
 
+// Returns true if the device runs OPPO/realme/OnePlus (all ColorOS).
+// On these devices LSPlant's trampoline for Settings.Secure.getString crashes
+// when invoked from certain third-party SDK JNI contexts (iFlytek, Tratao).
+static bool is_coloros_device() {
+    char manufacturer[PROP_VALUE_MAX] = {};
+    __system_property_get("ro.product.manufacturer", manufacturer);
+    // Case-insensitive compare against known ColorOS brands.
+    auto ci_eq = [](const char* a, const char* b) {
+        while (*a && *b) {
+            if (tolower((unsigned char)*a) != tolower((unsigned char)*b)) return false;
+            ++a; ++b;
+        }
+        return *a == '\0' && *b == '\0';
+    };
+    return ci_eq(manufacturer, "OPPO")
+        || ci_eq(manufacturer, "realme")
+        || ci_eq(manufacturer, "OnePlus");
+}
+
 void install_device_id_hooks(JNIEnv* env) {
     jclass hooker_class = load_hooker_class(env);
     if (hooker_class == nullptr) {
@@ -340,11 +362,19 @@ void install_device_id_hooks(JNIEnv* env) {
         "android/telephony/TelephonyManager", "getLine1Number", "()Ljava/lang/String;",
         "hookGetLine1Number", kCbSig, "backupGetLine1Number", false);
 
-    hook_one(env, hooker_obj, hooker_class,
-        "android/provider/Settings$Secure",
-        "getString",
-        "(Landroid/content/ContentResolver;Ljava/lang/String;)Ljava/lang/String;",
-        "hookSettingsSecureGetString", kCbSig, "backupSettingsSecureGetString", true);
+    // Settings.Secure.getString: skip on ColorOS (OPPO/realme/OnePlus).
+    // LSPlant's trampoline for this method crashes on OPPO's custom ART when
+    // invoked from certain third-party SDK JNI contexts (iFlytek, Tratao analytics),
+    // causing SIGABRT (stack corruption) and SIGSEGV (NewLocalRef with invalid ref).
+    if (!is_coloros_device()) {
+        hook_one(env, hooker_obj, hooker_class,
+            "android/provider/Settings$Secure",
+            "getString",
+            "(Landroid/content/ContentResolver;Ljava/lang/String;)Ljava/lang/String;",
+            "hookSettingsSecureGetString", kCbSig, "backupSettingsSecureGetString", true);
+    } else {
+        LOGI("hooks: skipping Settings.Secure.getString hook on ColorOS device");
+    }
 
     hook_one(env, hooker_obj, hooker_class,
         "android/net/wifi/WifiInfo", "getMacAddress", "()Ljava/lang/String;",
