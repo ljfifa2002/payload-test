@@ -254,7 +254,12 @@ public class HookerBridge {
     }
 
     private static String captureStack() {
-        StackTraceElement[] frames = Thread.currentThread().getStackTrace();
+        // Use new Throwable().getStackTrace() instead of Thread.currentThread().getStackTrace().
+        // On OPPO ColorOS 14, the latter calls art::VMStack_getThreadStackTrace which crashes
+        // in art::ArtMethod::GetOatQuickMethodHeader when walking LSPlant-hooked method frames.
+        // Throwable.fillInStackTrace() uses a different ART code path that handles these frames
+        // more safely.
+        StackTraceElement[] frames = new Throwable().getStackTrace();
         StringBuilder sb = new StringBuilder();
         int kept = 0;
         for (StackTraceElement f : frames) {
