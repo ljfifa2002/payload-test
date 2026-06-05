@@ -772,6 +772,7 @@ public class HookerBridge {
         String key = (targetPkg != null && !targetPkg.isEmpty() && !targetPkg.equals(currentPkg))
                 ? "Activity.startActivity_other" : "Activity.startActivity_self";
         log(key, targetPkg != null ? targetPkg : "");
+        logIntentDebug("Activity.startActivity(I)", args[0], args[1]);
         checkIntentViewUrl(args[1]);
         if (backupStartActivity != null)
             safeInvokeObject(backupStartActivity, args[0], args[1]);
@@ -780,6 +781,7 @@ public class HookerBridge {
 
     // Activity.startActivity(Intent, Bundle)  instance: args={thiz, intent, options}
     public Object hookStartActivityWithOptions(Object[] args) {
+        logIntentDebug("Activity.startActivity(IB)", args[0], args.length > 1 ? args[1] : null);
         if (args.length > 1) checkIntentViewUrl(args[1]);
         return safeInvokeObject(backupStartActivityWithOptions, args[0],
             args.length > 1 ? args[1] : null, args.length > 2 ? args[2] : null);
@@ -792,6 +794,7 @@ public class HookerBridge {
         String key = (targetPkg != null && !targetPkg.isEmpty() && !targetPkg.equals(currentPkg))
                 ? "Activity.startActivity_other" : "Activity.startActivity_self";
         log(key, targetPkg != null ? targetPkg : "");
+        logIntentDebug("Activity.startActivityForResult", args[0], args[1]);
         checkIntentViewUrl(args[1]);
         if (backupStartActivityForResult != null)
             safeInvokeObject(backupStartActivityForResult, args[0], args[1], args[2]);
@@ -814,9 +817,32 @@ public class HookerBridge {
         } catch (Exception ignored) {}
     }
 
+    // Log intent details for debugging — fires for every startActivity call regardless of action.
+    private static void logIntentDebug(String hook, Object thiz, Object intent) {
+        try {
+            String callerCls = thiz != null ? thiz.getClass().getName() : "null";
+            String action = "null";
+            String data   = "null";
+            String comp   = "null";
+            if (intent != null) {
+                Object a = intent.getClass().getMethod("getAction").invoke(intent);
+                if (a != null) action = a.toString();
+                Object d = intent.getClass().getMethod("getData").invoke(intent);
+                if (d != null) data = d.toString();
+                Object c = intent.getClass().getMethod("getComponent").invoke(intent);
+                if (c != null) comp = c.toString();
+            }
+            Log.i(TAG, "DBG " + hook + " caller=" + callerCls
+                    + " action=" + action + " data=" + data + " comp=" + comp);
+        } catch (Exception e) {
+            Log.i(TAG, "DBG " + hook + " err=" + e);
+        }
+    }
+
     // ContextWrapper.startActivity(Intent) — covers Custom Tabs and Context-level calls.
     // instance: args={thiz, intent}
     public Object hookContextStartActivity(Object[] args) {
+        logIntentDebug("ContextWrapper.startActivity(I)", args[0], args.length > 1 ? args[1] : null);
         if (args.length > 1) checkIntentViewUrl(args[1]);
         return safeInvokeObject(backupContextStartActivity, args[0], args[1]);
     }
@@ -824,6 +850,7 @@ public class HookerBridge {
     // ContextWrapper.startActivity(Intent, Bundle) — two-arg variant (API 16+).
     // instance: args={thiz, intent, options}
     public Object hookContextStartActivityWithOptions(Object[] args) {
+        logIntentDebug("ContextWrapper.startActivity(IB)", args[0], args.length > 1 ? args[1] : null);
         if (args.length > 1) checkIntentViewUrl(args[1]);
         return safeInvokeObject(backupContextStartActivityWithOptions, args[0],
             args.length > 1 ? args[1] : null, args.length > 2 ? args[2] : null);
