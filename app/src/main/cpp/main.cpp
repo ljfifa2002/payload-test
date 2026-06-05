@@ -18,8 +18,8 @@
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
 // Bumped on every pushed commit so logcat immediately reveals which binary is deployed.
-// Format: YYYY.MM.DD-<short-hash>
-#define PAYLOAD_VERSION "2026.06.03-android15-dynsym"
+// Format: V<major>.<minor>.<patch>-<date>
+#define PAYLOAD_VERSION "V1.0.0-20260605"
 
 // should_activate decides whether payload hooks should be installed in the
 // current process.
