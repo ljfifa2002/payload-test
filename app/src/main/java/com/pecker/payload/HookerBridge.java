@@ -1155,10 +1155,10 @@ public class HookerBridge {
         } catch (Exception e) { Log.e(TAG, "backup getInputStream failed: " + e); }
         if (realIs == null) return null;
 
+        byte[] buf = new byte[BODY_PREVIEW];
+        int total = 0;
         try {
             // Read up to BODY_PREVIEW bytes; return SequenceInputStream so app sees full body.
-            byte[] buf = new byte[BODY_PREVIEW];
-            int total = 0;
             while (total < BODY_PREVIEW) {
                 int n = realIs.read(buf, total, BODY_PREVIEW - total);
                 if (n < 0) break;
@@ -1192,7 +1192,12 @@ public class HookerBridge {
                     new java.io.ByteArrayInputStream(buf, 0, total), realIs);
             }
         } catch (Exception e) { Log.e(TAG, "readConnBody failed: " + e); }
-        return realIs;
+        // Return a safe copy of whatever was read instead of the potentially broken realIs.
+        // Bug fix: returning realIs here was unsafe — if the underlying connection was
+        // closed/errored during read, realIs is in a broken state and any subsequent
+        // read() by the app would throw IOException, propagating to a crash on some
+        // devices (e.g. OPPO ColorOS with TBS WebView).
+        return new java.io.ByteArrayInputStream(buf, 0, total);
     }
 
     // Returns true if buf[0..len) looks like binary (> 12% C0 control codes).
