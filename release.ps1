@@ -1,3 +1,9 @@
+<# ::
+@echo off
+powershell -NoLogo -ExecutionPolicy Bypass -File "%~f0"
+pause
+exit /b
+#>
 # release.ps1 — 自动递增 v1.0.x tag 并推送，触发 CI 构建
 # 推送前先确保 master 上有未推送的改动时一并提交推送
 
