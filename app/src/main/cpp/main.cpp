@@ -19,7 +19,7 @@
 
 // Bumped automatically by .git/hooks/pre-commit via build_number.txt.
 // Format: V1.0.<build_number>
-#define PAYLOAD_VERSION "V1.0.1"
+#define PAYLOAD_VERSION "V1.0.4"
 
 // should_activate decides whether payload hooks should be installed in the
 // current process.
