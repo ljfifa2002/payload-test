@@ -223,6 +223,42 @@ public class HookerBridge {
     public Method backupTbsWebViewLoadUrl;
     public Method backupTbsWebChromeClientOnReceivedTitle;
 
+    // Phase 12: ClassLoader.loadClass — collect loaded class names for SDK detection
+    public Method backupClassLoaderLoadClass;
+
+    // Batch state for loaded_class messages.
+    // Thread-safe: ConcurrentHashMap as Set for dedup; synchronized list for batch.
+    private static final java.util.concurrent.ConcurrentHashMap<String, Boolean> _lcSeen =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.List<String> _lcBatch =
+            java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+    private static volatile long _lcBatchStartMs = 0;
+    private static final int    LC_BATCH_SIZE       = 200;
+    private static final long   LC_FLUSH_INTERVAL_MS = 5000;
+    private static final String[] LC_SYS_PREFIXES = {
+        "java.", "javax.", "android.", "dalvik.",
+        "com.android.", "sun.", "libcore.", "kotlin.", "kotlinx."
+    };
+
+    private static void lcFlush() {
+        String[] snapshot;
+        synchronized (_lcBatch) {
+            if (_lcBatch.isEmpty()) return;
+            snapshot = _lcBatch.toArray(new String[0]);
+            _lcBatch.clear();
+            _lcBatchStartMs = 0;
+        }
+        StringBuilder sb = new StringBuilder("{\"type\":\"loaded_class\",\"classes\":[");
+        for (int i = 0; i < snapshot.length; i++) {
+            if (i > 0) sb.append(',');
+            sb.append('"').append(jsonEscape(snapshot[i])).append('"');
+        }
+        sb.append("]}");
+        String json = sb.toString();
+        Log.i(TAG, json);
+        SocketChannel.send(json);
+    }
+
     // Maps each WebView instance to the last URL it loaded.
     // Looked up when onReceivedTitle fires to retrieve the URL for reporting.
     // WeakHashMap: entries are automatically removed when WebView is GC'd.
@@ -429,7 +465,37 @@ public class HookerBridge {
             args[0], args.length > 1 ? args[1] : null, args.length > 2 ? args[2] : null);
     }
 
-    // ---- Instance hook callbacks ([Ljava/lang/Object;)Ljava/lang/Object; ----
+    // ---- Phase 12: ClassLoader.loadClass — SDK class collection ----
+
+    // ClassLoader.loadClass(String name)  instance: args={thiz, name}
+    public Object hookClassLoaderLoadClass(Object[] args) {
+        Object result = backupClassLoaderLoadClass != null
+                ? safeInvokeObject(backupClassLoaderLoadClass, args[0], args[1])
+                : null;
+        try {
+            String name = (String) args[1];
+            if (name != null && _lcSeen.putIfAbsent(name, Boolean.TRUE) == null) {
+                boolean skip = false;
+                for (String prefix : LC_SYS_PREFIXES) {
+                    if (name.startsWith(prefix)) { skip = true; break; }
+                }
+                if (!skip) {
+                    boolean doFlush = false;
+                    synchronized (_lcBatch) {
+                        _lcBatch.add(name);
+                        if (_lcBatchStartMs == 0) _lcBatchStartMs = System.currentTimeMillis();
+                        if (_lcBatch.size() >= LC_BATCH_SIZE) {
+                            doFlush = true;
+                        } else if (System.currentTimeMillis() - _lcBatchStartMs >= LC_FLUSH_INTERVAL_MS) {
+                            doFlush = true;
+                        }
+                    }
+                    if (doFlush) lcFlush();
+                }
+            }
+        } catch (Exception ignored) {}
+        return result;
+    }
 
     // TelephonyManager.getDeviceId()  instance: args={thiz}
     public Object hookGetDeviceId(Object[] args) {

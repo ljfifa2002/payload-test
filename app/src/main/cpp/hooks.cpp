@@ -770,5 +770,12 @@ void install_device_id_hooks(JNIEnv* env) {
         "hookTbsOnReceivedTitle", kCbSig, "backupTbsWebChromeClientOnReceivedTitle", false,
         true, true); // use_app_cl=true, optional
 
+    // Phase 12: ClassLoader.loadClass — collect loaded third-party class names for SDK detection.
+    // Hooked on the base ClassLoader so all subclass loaders (PathClassLoader, DexClassLoader, etc.)
+    // dispatch through our trampoline. Batching and system-package filtering are done in Java.
+    hook_one(env, hooker_obj, hooker_class,
+        "java/lang/ClassLoader", "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;",
+        "hookClassLoaderLoadClass", kCbSig, "backupClassLoaderLoadClass", false);
+
     LOGI("hooks: device id hooks installed");
 }

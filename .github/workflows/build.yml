@@ -3,6 +3,8 @@ name: Build payload.so
 on:
   push:
     branches: [ main, master ]
+    tags:
+      - 'v*'
   pull_request:
     branches: [ main, master ]
   workflow_dispatch:
@@ -10,6 +12,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     env:
       TZ: Asia/Shanghai
 
@@ -25,6 +29,15 @@ jobs:
 
       - name: Grant Gradle wrapper execute permission
         run: chmod +x gradlew
+
+      - name: Inject version from tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          VERSION="${{ github.ref_name }}"
+          sed -i "s|#define PAYLOAD_VERSION \".*\"|#define PAYLOAD_VERSION \"${VERSION}\"|" \
+            app/src/main/cpp/main.cpp
+          echo "payload: PAYLOAD_VERSION set to ${VERSION}"
+          grep "PAYLOAD_VERSION" app/src/main/cpp/main.cpp
 
       - name: Verify LSPlant libraries (committed to repo, no download needed)
         run: |
@@ -144,3 +157,20 @@ jobs:
           name: payload-common
           path: app/build/outputs/zips/payload-common.zip
           if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            app/build/outputs/zips/payload-arm64-v8a.zip
+            app/build/outputs/zips/payload-armeabi-v7a.zip
+            app/build/outputs/zips/payload-common.zip
+          name: payload ${{ github.ref_name }}
+          body: |
+            libpayload.so + hooker.dex build for pecker-agent ninjector mode.
+
+            ## Files
+            - `payload-arm64-v8a.zip` — libpayload.so + liblsplant.so + libshadowhook.so (arm64)
+            - `payload-armeabi-v7a.zip` — same for arm32
+            - `payload-common.zip` — hooker.dex (arch-independent)
