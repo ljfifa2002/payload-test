@@ -9,6 +9,16 @@ exit /b
 
 $ErrorActionPreference = 'Stop'
 
+# 切到脚本所在目录再跑 git。作为 .ps1 双击 / "Run with PowerShell" 启动时，工作
+# 目录是 System32 或用户主目录而非仓库根——这会让下面的 git 检查静默落空（git 在
+# 非仓库目录报错，被 2>$null 吞掉，$status 为空，未提交改动检测被跳过）。旧的
+# release.bat 靠 cmd 双击的 cwd 规避了这点，合并成 polyglot 后不再保证，故显式切。
+Set-Location -LiteralPath $PSScriptRoot
+
+# 防御：确认确实在 git 仓库内，否则大声失败而不是静默跳过
+git rev-parse --is-inside-work-tree *> $null
+if ($LASTEXITCODE -ne 0) { Write-Error "Not inside a git repo at $PSScriptRoot"; exit 1 }
+
 # 检查 master 是否领先 origin/master（有未推送提交）
 $ahead = git rev-list --count "origin/master..HEAD" 2>$null
 if ($ahead -gt 0) {
