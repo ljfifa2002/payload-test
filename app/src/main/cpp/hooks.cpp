@@ -362,11 +362,18 @@ void install_device_id_hooks(JNIEnv* env) {
         "android/telephony/TelephonyManager", "getLine1Number", "()Ljava/lang/String;",
         "hookGetLine1Number", kCbSig, "backupGetLine1Number", false);
 
-    // Settings.Secure.getString: skip on ColorOS (OPPO/realme/OnePlus).
-    // LSPlant's trampoline for this method crashes on OPPO's custom ART when
-    // invoked from certain third-party SDK JNI contexts (iFlytek, Tratao analytics),
-    // causing SIGABRT (stack corruption) and SIGSEGV (NewLocalRef with invalid ref).
-    if (!is_coloros_device()) {
+    // Settings.Secure.getString: in the default build, skip on ColorOS
+    // (OPPO/realme/OnePlus) — LSPlant's trampoline for this method crashes on
+    // OPPO's custom ART when invoked from certain third-party SDK JNI contexts
+    // (iFlytek, Tratao analytics), causing SIGABRT (stack corruption) and SIGSEGV
+    // (NewLocalRef with invalid ref). In LSPLANT_ONLY builds the ColorOS inline
+    // path is disabled, so LSPlant must cover this method on all devices.
+#ifdef LSPLANT_ONLY
+    const bool skip_settings_getstring = false;
+#else
+    const bool skip_settings_getstring = is_coloros_device();
+#endif
+    if (!skip_settings_getstring) {
         hook_one(env, hooker_obj, hooker_class,
             "android/provider/Settings$Secure",
             "getString",

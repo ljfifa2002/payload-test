@@ -182,7 +182,11 @@ static void payload_init() {
     LOGI("lsplant::Init ok");
 
     install_device_id_hooks(env);
+#ifndef LSPLANT_ONLY
     install_art_inline_hooks(env, vm);
+#else
+    LOGI("payload_init: LSPLANT_ONLY build — inline ART hooks disabled, LSPlant only");
+#endif
     init_ssl_hooks_jni(vm, env);
     install_ssl_hooks();
     LOGI("payload init ok");
