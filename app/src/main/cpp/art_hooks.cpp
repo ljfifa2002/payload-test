@@ -2,48 +2,25 @@
 #include <jni.h>
 #include <android/log.h>
 #include <dlfcn.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <sys/mman.h>
-#include <sys/system_properties.h>
 #include <shadowhook.h>
-#include <string>
 #include <vector>
 #include <cstdint>
 #include <cstdio>
-#include <cstring>
 
 #define TAG "payload"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
-// art_hooks uses ART ArtMethod entry-point patching with ARM64-specific:
-//   • inline assembly (x0-x19 registers)
-//   • instruction encoding checks (LDR X0, LDUR X16, BR X16 opcodes)
-//   • Oplus two-level dispatch mechanism (ARM64 device-specific)
-// On armeabi-v7a these techniques do not apply; the LSPlant hooks in hooks.cpp
-// cover the same APIs without architecture-specific workarounds.
+// This file used to install inline ART hooks to bypass an assumed "Oplus watchdog".
+// That path was removed once a clean single LSPlant hook was shown to work on
+// ColorOS (the "watchdog" was a double-hook-era misdiagnosis).  Only the ArtMethod
+// entry_point offset calibration remains — hooks.cpp (native_hook_method) uses
+// (g_ep_offset - 28) to set kAccCompileDontBother on WeChat mini-program methods so
+// the JIT does not recompile them and overwrite LSPlant's dispatch stub.
 #if defined(__aarch64__)
 
-// ---------------------------------------------------------------------------
-// ArtMethod* / entry_point helpers
-// ---------------------------------------------------------------------------
-
-// Standard arm64 ArtMethod layout (AOSP, offset in bytes):
-//   [0]  declaring_class_  (uint32_t)
-//   [4]  access_flags_     (uint32_t)
-//   [8]  dex_code_item_offset_ (uint32_t)
-//   [12] dex_method_index_ (uint32_t)
-//   [16] method_index_     (uint16_t)
-//   [18] hotness_count_    (uint16_t)
-//   [20] imt_index_        (uint16_t) / padding
-//   [24] data_             (uintptr_t)  — JNI fn ptr / profiling info
-//   [32] entry_point_from_quick_compiled_code_  (uintptr_t)
-//
-// Oplus inserts extra fields before offset 0, shifting everything down.
-// We calibrate by scanning for the first 8-byte-aligned offset whose value
-// looks like a valid executable code pointer (verified via /proc/self/maps).
-
+// Standard arm64 ArtMethod layout puts entry_point_from_quick_compiled_code_ at
+// offset 32.  Oplus inserts extra fields, shifting it; calibrate at startup.
 int g_ep_offset = 32;
 
 // Parse /proc/self/maps and collect [start, end) ranges that are executable.
@@ -140,294 +117,21 @@ done:
     LOGI("art_hooks: calibration failed, keeping default offset=%d", g_ep_offset);
 }
 
-// Read the compiled-code entry point from an ArtMethod.
-static void* get_entry_point(jmethodID mid) {
-    auto* am = reinterpret_cast<uint8_t*>(mid);
-    return *reinterpret_cast<void**>(am + g_ep_offset);
-}
-
-// ---------------------------------------------------------------------------
-// Oplus two-level dispatch:
-//   stub:  LDR X0,[PC+12]  / LDUR X16,[X0,#24] / BR X16 / <Level2*>
-// Watchdog monitors Primary ArtMethod, NOT Level2.
-// So: read Level2* from literal, patch Level2+24 with hook_fn.
-// Returns original compiled-code ptr (for calling through), or nullptr.
-// ---------------------------------------------------------------------------
-static void* patch_level2_entry(void* stub_ep, void* hook_fn) {
-    auto* insns = reinterpret_cast<uint32_t*>(stub_ep);
-    LOGI("art_hooks: stub[%p]: %08x %08x %08x | %08x %08x | %08x",
-         stub_ep, insns[0], insns[1], insns[2], insns[3], insns[4], insns[5]);
-
-    // Confirm stub pattern: insns[0]=LDR literal, insns[1]=LDUR X16,[X0,#24], insns[2]=BR X16
-    bool is_ldr_lit  = (insns[0] & 0x3B000000) == 0x18000000;
-    bool is_ldur_x16 = (insns[1] == 0xF8418010);
-    bool is_br_x16   = (insns[2] == 0xD61F0200);
-    if (!is_ldr_lit || !is_ldur_x16 || !is_br_x16) {
-        LOGE("art_hooks: unknown stub pattern, skip");
-        return nullptr;
-    }
-
-    // Decode Level2* address from imm19 of LDR literal
-    int32_t imm19 = (int32_t)((insns[0] >> 5) & 0x7FFFF);
-    if (imm19 & (1 << 18)) imm19 |= ~(int32_t)0x7FFFF;
-    int lit_off = imm19 * 4;
-    if (lit_off < 0 || lit_off > 20) {
-        LOGE("art_hooks: lit_off=%d out of range", lit_off);
-        return nullptr;
-    }
-    void* level2 = *reinterpret_cast<void**>(
-        reinterpret_cast<uint8_t*>(stub_ep) + lit_off);
-    LOGI("art_hooks: Level2=%p", level2);
-    if (!level2) return nullptr;
-
-    // Level2+24 = entry_point_from_quick_compiled_code_ (same offset as calibrated)
-    auto* ep_slot = reinterpret_cast<void**>(
-        reinterpret_cast<uint8_t*>(level2) + 24);
-    void* orig = *ep_slot;
-    LOGI("art_hooks: Level2+24 = orig=%p", orig);
-
-    // Patch via mprotect (Level2 is a data region, not exec — simpler than /proc/self/mem)
-    uintptr_t page = reinterpret_cast<uintptr_t>(ep_slot) & ~(uintptr_t)0xFFF;
-    if (mprotect(reinterpret_cast<void*>(page), 0x1000,
-                 PROT_READ | PROT_WRITE) == 0) {
-        *ep_slot = hook_fn;
-        LOGI("art_hooks: patched Level2+24 via mprotect -> %p", hook_fn);
-        return orig;
-    }
-    LOGE("art_hooks: mprotect failed errno=%d, trying /proc/self/mem", errno);
-
-    // Fallback: /proc/self/mem
-    int fd = open("/proc/self/mem", O_RDWR);
-    if (fd < 0) { LOGE("art_hooks: open /proc/self/mem failed errno=%d", errno); return nullptr; }
-    bool ok = (lseek(fd, reinterpret_cast<off_t>(ep_slot), SEEK_SET) >= 0 &&
-               write(fd, &hook_fn, sizeof(hook_fn)) == (ssize_t)sizeof(hook_fn));
-    close(fd);
-    if (!ok) { LOGE("art_hooks: write /proc/self/mem failed errno=%d", errno); return nullptr; }
-    __builtin___clear_cache(reinterpret_cast<char*>(ep_slot),
-                            reinterpret_cast<char*>(ep_slot) + 8);
-    LOGI("art_hooks: patched Level2+24 via /proc/self/mem -> %p", hook_fn);
-    return orig;
-}
-
-// ---------------------------------------------------------------------------
-// ART Thread* preservation helpers (ARM64 only)
-// ---------------------------------------------------------------------------
-
-__attribute__((naked))
-static void* invoke_art_2arg(void* orig, void* x0, void* x1, void* thread_ptr) {
-    asm volatile(
-        "mov x16, x0\n"
-        "mov x0,  x1\n"
-        "mov x1,  x2\n"
-        "mov x19, x3\n"
-        "br  x16\n"
-    );
-}
-
-__attribute__((naked))
-static void* invoke_art_3arg(void* orig, void* x0, void* x1, void* x2, void* thread_ptr) {
-    asm volatile(
-        "mov x16, x0\n"
-        "mov x0,  x1\n"
-        "mov x1,  x2\n"
-        "mov x2,  x3\n"
-        "mov x19, x4\n"
-        "br  x16\n"
-    );
-}
-
-#define READ_THREAD_PTR(var) \
-    void* var; \
-    asm volatile("mov %0, x19" : "=r"(var))
-
-// ---------------------------------------------------------------------------
-// JNI helpers
-// ---------------------------------------------------------------------------
-static JavaVM* g_vm = nullptr;
-
-static int get_env(JNIEnv** env_out) {
-    if (!g_vm) return JNI_ERR;
-    jint r = g_vm->GetEnv(reinterpret_cast<void**>(env_out), JNI_VERSION_1_6);
-    if (r == JNI_EDETACHED) r = g_vm->AttachCurrentThread(env_out, nullptr);
-    return r;
-}
-
-static void emit(const char* method, const char* data) {
-    LOGI("{\"type\":\"behavior\",\"method\":\"%s\",\"data\":\"%s\"}", method, data);
-}
-
-static std::string jstring_val(JNIEnv* env, void* raw_ref) {
-    if (!raw_ref || !env) return "";
-    jstring local = static_cast<jstring>(env->NewLocalRef(reinterpret_cast<jstring>(raw_ref)));
-    if (!local || env->ExceptionCheck()) { env->ExceptionClear(); return ""; }
-    const char* cstr = env->GetStringUTFChars(local, nullptr);
-    if (env->ExceptionCheck()) { env->ExceptionClear(); env->DeleteLocalRef(local); return ""; }
-    std::string r = cstr ? cstr : "";
-    if (cstr) env->ReleaseStringUTFChars(local, cstr);
-    env->DeleteLocalRef(local);
-    return r;
-}
-
-// ---------------------------------------------------------------------------
-// Hook functions
-// ---------------------------------------------------------------------------
-using FnArtInst   = void*(*)(void*, void*);
-using FnArtStatic = void*(*)(void*, void*, void*);
-
-static FnArtInst   orig_getDeviceId        = nullptr;
-static FnArtInst   orig_getSubscriberId    = nullptr;
-static FnArtInst   orig_getSimSerialNumber = nullptr;
-static FnArtInst   orig_getLine1Number     = nullptr;
-static FnArtStatic orig_settingsGetString  = nullptr;
-static FnArtInst   orig_getMacAddress      = nullptr;
-static FnArtInst   orig_getHardwareAddress = nullptr;
-
-static void* hook_getDeviceId(void* am, void* thiz) {
-    READ_THREAD_PTR(tp);
-    void* ret = orig_getDeviceId ? invoke_art_2arg((void*)orig_getDeviceId, am, thiz, tp) : nullptr;
-    JNIEnv* env = nullptr;
-    if (get_env(&env) == JNI_OK)
-        emit("TelephonyManager.getDeviceId", jstring_val(env, ret).c_str());
-    return ret;
-}
-static void* hook_getSubscriberId(void* am, void* thiz) {
-    READ_THREAD_PTR(tp);
-    void* ret = orig_getSubscriberId ? invoke_art_2arg((void*)orig_getSubscriberId, am, thiz, tp) : nullptr;
-    JNIEnv* env = nullptr;
-    if (get_env(&env) == JNI_OK)
-        emit("TelephonyManager.getSubscriberId", jstring_val(env, ret).c_str());
-    return ret;
-}
-static void* hook_getSimSerialNumber(void* am, void* thiz) {
-    READ_THREAD_PTR(tp);
-    void* ret = orig_getSimSerialNumber ? invoke_art_2arg((void*)orig_getSimSerialNumber, am, thiz, tp) : nullptr;
-    JNIEnv* env = nullptr;
-    if (get_env(&env) == JNI_OK)
-        emit("TelephonyManager.getSimSerialNumber", jstring_val(env, ret).c_str());
-    return ret;
-}
-static void* hook_getLine1Number(void* am, void* thiz) {
-    READ_THREAD_PTR(tp);
-    void* ret = orig_getLine1Number ? invoke_art_2arg((void*)orig_getLine1Number, am, thiz, tp) : nullptr;
-    JNIEnv* env = nullptr;
-    if (get_env(&env) == JNI_OK)
-        emit("TelephonyManager.getLine1Number", jstring_val(env, ret).c_str());
-    return ret;
-}
-static void* hook_settingsGetString(void* am, void* cr, void* key) {
-    READ_THREAD_PTR(tp);
-    void* ret = orig_settingsGetString ? invoke_art_3arg((void*)orig_settingsGetString, am, cr, key, tp) : nullptr;
-    JNIEnv* env = nullptr;
-    if (get_env(&env) == JNI_OK)
-        emit("Settings.Secure.getString", (jstring_val(env, key) + "=" + jstring_val(env, ret)).c_str());
-    return ret;
-}
-static void* hook_getMacAddress(void* am, void* thiz) {
-    READ_THREAD_PTR(tp);
-    void* ret = orig_getMacAddress ? invoke_art_2arg((void*)orig_getMacAddress, am, thiz, tp) : nullptr;
-    JNIEnv* env = nullptr;
-    if (get_env(&env) == JNI_OK)
-        emit("WifiInfo.getMacAddress", jstring_val(env, ret).c_str());
-    return ret;
-}
-static void* hook_getHardwareAddress(void* am, void* thiz) {
-    READ_THREAD_PTR(tp);
-    void* ret = orig_getHardwareAddress ? invoke_art_2arg((void*)orig_getHardwareAddress, am, thiz, tp) : nullptr;
-    emit("NetworkInterface.getHardwareAddress", "called");
-    return ret;
-}
-
-// ---------------------------------------------------------------------------
-// Installer
-// ---------------------------------------------------------------------------
-struct HookTarget {
-    const char* class_name;
-    const char* method_name;
-    const char* sig;
-    bool        is_static;
-    void*       hook_fn;
-    void**      orig_out;
-};
-
-static void install_one(JNIEnv* env, const HookTarget& t) {
-    jclass cls = env->FindClass(t.class_name);
-    if (!cls) { env->ExceptionClear(); LOGE("art_hooks: FindClass failed: %s", t.class_name); return; }
-    jmethodID mid = t.is_static
-        ? env->GetStaticMethodID(cls, t.method_name, t.sig)
-        : env->GetMethodID(cls, t.method_name, t.sig);
-    if (!mid) { env->ExceptionClear(); LOGE("art_hooks: GetMethodID failed: %s.%s", t.class_name, t.method_name); return; }
-
-    void* ep = get_entry_point(mid);
-    if (!ep) { LOGE("art_hooks: ep null %s.%s", t.class_name, t.method_name); return; }
-    LOGI("art_hooks: ep %s.%s @ %p", t.class_name, t.method_name, ep);
-
-    void* orig = nullptr;
-    void* stub = shadowhook_hook_func_addr(ep, t.hook_fn, &orig);
-    if (stub) {
-        *t.orig_out = orig;
-        LOGI("art_hooks: hooked (SH) %s.%s", t.class_name, t.method_name);
-        return;
-    }
-
-    orig = patch_level2_entry(ep, t.hook_fn);
-    if (!orig) { LOGE("art_hooks: all hooks failed for %s.%s", t.class_name, t.method_name); return; }
-    memcpy(t.orig_out, &orig, sizeof(void*));
-    LOGI("art_hooks: hooked (L2) %s.%s orig=%p", t.class_name, t.method_name, orig);
-}
-
-// Returns true only on Oplus/ColorOS devices where the ART watchdog blocks LSPlant.
-static bool is_oplus_device() {
-    char manufacturer[PROP_VALUE_MAX] = {};
-    char brand[PROP_VALUE_MAX] = {};
-    __system_property_get("ro.product.manufacturer", manufacturer);
-    __system_property_get("ro.product.brand", brand);
-    for (const char* val : {manufacturer, brand}) {
-        std::string s = val;
-        for (auto& c : s) c = tolower(c);
-        if (s.find("oppo") != std::string::npos ||
-            s.find("oneplus") != std::string::npos ||
-            s.find("realme") != std::string::npos ||
-            s.find("oplus") != std::string::npos) {
-            return true;
-        }
-    }
-    return false;
-}
-
-void install_art_inline_hooks(JNIEnv* env, JavaVM* vm) {
-    g_vm = vm;
-
-    if (!is_oplus_device()) {
-        LOGI("art_hooks: non-Oplus device, skipping inline hooks (LSPlant handles it)");
-        return;
-    }
-
+void calibrate_art_offsets(JNIEnv* env) {
     calibrate_ep_offset(env);
-
-    const HookTarget targets[] = {
-        {"android/telephony/TelephonyManager", "getDeviceId",        "()Ljava/lang/String;",  false, (void*)hook_getDeviceId,        (void**)&orig_getDeviceId},
-        {"android/telephony/TelephonyManager", "getSubscriberId",    "()Ljava/lang/String;",  false, (void*)hook_getSubscriberId,    (void**)&orig_getSubscriberId},
-        {"android/telephony/TelephonyManager", "getSimSerialNumber", "()Ljava/lang/String;",  false, (void*)hook_getSimSerialNumber, (void**)&orig_getSimSerialNumber},
-        {"android/telephony/TelephonyManager", "getLine1Number",     "()Ljava/lang/String;",  false, (void*)hook_getLine1Number,     (void**)&orig_getLine1Number},
-        {"android/provider/Settings$Secure",   "getString",          "(Landroid/content/ContentResolver;Ljava/lang/String;)Ljava/lang/String;", true, (void*)hook_settingsGetString, (void**)&orig_settingsGetString},
-        {"android/net/wifi/WifiInfo",          "getMacAddress",      "()Ljava/lang/String;",  false, (void*)hook_getMacAddress,      (void**)&orig_getMacAddress},
-        {"java/net/NetworkInterface",          "getHardwareAddress", "()[B",                  false, (void*)hook_getHardwareAddress, (void**)&orig_getHardwareAddress},
-    };
-    for (const auto& tgt : targets) install_one(env, tgt);
-    LOGI("art_hooks: inline hooks installed (ep_offset=%d)", g_ep_offset);
+    LOGI("art_hooks: ep_offset=%d", g_ep_offset);
 }
 
 #else // !defined(__aarch64__)
 
-// armeabi-v7a: ART inline hooks are not implemented (ARM64-specific mechanism).
-// LSPlant in hooks.cpp covers the same APIs on ARM32 devices.
-// g_ep_offset must still be defined (referenced by hooks.cpp) — standard ARM32 layout
-// has entry_point_from_quick_compiled_code_ at offset 32, same as ARM64.
+// armeabi-v7a: standard ARM32 ArtMethod layout has
+// entry_point_from_quick_compiled_code_ at offset 32 (same as ARM64) — no
+// calibration needed.  g_ep_offset must still be defined (referenced by hooks.cpp).
 int g_ep_offset = 32;
 
-void install_art_inline_hooks(JNIEnv* /*env*/, JavaVM* /*vm*/) {
+void calibrate_art_offsets(JNIEnv* /*env*/) {
     __android_log_print(ANDROID_LOG_INFO, "payload",
-        "art_hooks: armeabi-v7a build, skipping inline hooks (LSPlant handles it)");
+        "art_hooks: armeabi-v7a build, ep_offset=32 (no calibration)");
 }
 
 #endif // defined(__aarch64__)

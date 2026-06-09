@@ -4,22 +4,23 @@ powershell -NoLogo -ExecutionPolicy Bypass -File "%~f0"
 pause
 exit /b
 #>
-# release.ps1 — 自动递增 v1.0.x tag 并推送，触发 CI 构建
-# 推送前先确保 master 上有未推送的改动时一并提交推送
+# release.ps1 - auto-increment the v1.0.x tag and push it to trigger the CI build.
+# Commits and pushes any pending master changes first.
 
 $ErrorActionPreference = 'Stop'
 
-# 切到脚本所在目录再跑 git。作为 .ps1 双击 / "Run with PowerShell" 启动时，工作
-# 目录是 System32 或用户主目录而非仓库根——这会让下面的 git 检查静默落空（git 在
-# 非仓库目录报错，被 2>$null 吞掉，$status 为空，未提交改动检测被跳过）。旧的
-# release.bat 靠 cmd 双击的 cwd 规避了这点，合并成 polyglot 后不再保证，故显式切。
+# Run from the script's own directory. Launched as a .ps1 ("Run with PowerShell")
+# the working dir is System32 / the user profile, not the repo root, which made the
+# git checks below silently no-op. Set-Location fixes it regardless of how it starts.
 Set-Location -LiteralPath $PSScriptRoot
 
-# 防御：确认确实在 git 仓库内，否则大声失败而不是静默跳过
-git rev-parse --is-inside-work-tree *> $null
-if ($LASTEXITCODE -ne 0) { Write-Error "Not inside a git repo at $PSScriptRoot"; exit 1 }
+# Guard: fail loud if this is not the repo root (.git missing). Uses Test-Path,
+# not git rev-parse, which is unreliable with LASTEXITCODE under Windows PowerShell 5.1.
+if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot '.git'))) {
+    Write-Error "Not a git repo: no .git found at $PSScriptRoot"; exit 1
+}
 
-# 检查 master 是否领先 origin/master（有未推送提交）
+# Check whether master is ahead of origin/master (unpushed commits).
 $ahead = git rev-list --count "origin/master..HEAD" 2>$null
 if ($ahead -gt 0) {
     Write-Host "WARNING: $ahead unpushed commit(s) on master. Pushing master first..."
@@ -29,7 +30,7 @@ if ($ahead -gt 0) {
     Write-Host ""
 }
 
-# 检查工作区是否有未提交的改动
+# Check the working tree for uncommitted changes.
 $status = git status --porcelain 2>$null
 if ($status) {
     Write-Host "WARNING: uncommitted changes detected:"
@@ -51,7 +52,7 @@ if ($status) {
     }
 }
 
-# 找最新 v1.0.x tag
+# Find the latest v1.0.x tag.
 $lastTag = git tag --sort=v:refname |
     Where-Object { $_ -match '^v1\.0\.(\d+)$' } |
     Select-Object -Last 1

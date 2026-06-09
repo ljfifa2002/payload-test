@@ -1,10 +1,10 @@
 #pragma once
 #include <jni.h>
 
-// Install ShadowHook inline hooks directly on compiled OAT code for each target method.
-// The Oplus watchdog only monitors ArtMethod field values, not the bytes at those addresses,
-// so patching the code itself survives restoration cycles.
-void install_art_inline_hooks(JNIEnv* env, JavaVM* vm);
+// Calibrate g_ep_offset for this device (no-op on standard layouts). Call once at
+// startup after the JavaVM is up; the inline ART-hook path that used to live here
+// was removed (LSPlant covers all devices now).
+void calibrate_art_offsets(JNIEnv* env);
 
 // Calibrated offset of entry_point_from_quick_compiled_code_ within ArtMethod*.
 // Default 32 (standard AOSP arm64). Oplus devices may have a larger offset due to

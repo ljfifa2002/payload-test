@@ -267,25 +267,6 @@ static void JNICALL native_deoptimize(JNIEnv* env, jclass /*cls*/, jobject metho
     }
 }
 
-// Returns true if the device runs OPPO/realme/OnePlus (all ColorOS).
-// On these devices LSPlant's trampoline for Settings.Secure.getString crashes
-// when invoked from certain third-party SDK JNI contexts (iFlytek, Tratao).
-static bool is_coloros_device() {
-    char manufacturer[PROP_VALUE_MAX] = {};
-    __system_property_get("ro.product.manufacturer", manufacturer);
-    // Case-insensitive compare against known ColorOS brands.
-    auto ci_eq = [](const char* a, const char* b) {
-        while (*a && *b) {
-            if (tolower((unsigned char)*a) != tolower((unsigned char)*b)) return false;
-            ++a; ++b;
-        }
-        return *a == '\0' && *b == '\0';
-    };
-    return ci_eq(manufacturer, "OPPO")
-        || ci_eq(manufacturer, "realme")
-        || ci_eq(manufacturer, "OnePlus");
-}
-
 void install_device_id_hooks(JNIEnv* env) {
     jclass hooker_class = load_hooker_class(env);
     if (hooker_class == nullptr) {
@@ -362,26 +343,15 @@ void install_device_id_hooks(JNIEnv* env) {
         "android/telephony/TelephonyManager", "getLine1Number", "()Ljava/lang/String;",
         "hookGetLine1Number", kCbSig, "backupGetLine1Number", false);
 
-    // Settings.Secure.getString: in the default build, skip on ColorOS
-    // (OPPO/realme/OnePlus) — LSPlant's trampoline for this method crashes on
-    // OPPO's custom ART when invoked from certain third-party SDK JNI contexts
-    // (iFlytek, Tratao analytics), causing SIGABRT (stack corruption) and SIGSEGV
-    // (NewLocalRef with invalid ref). In LSPLANT_ONLY builds the ColorOS inline
-    // path is disabled, so LSPlant must cover this method on all devices.
-#ifdef LSPLANT_ONLY
-    const bool skip_settings_getstring = false;
-#else
-    const bool skip_settings_getstring = is_coloros_device();
-#endif
-    if (!skip_settings_getstring) {
-        hook_one(env, hooker_obj, hooker_class,
-            "android/provider/Settings$Secure",
-            "getString",
-            "(Landroid/content/ContentResolver;Ljava/lang/String;)Ljava/lang/String;",
-            "hookSettingsSecureGetString", kCbSig, "backupSettingsSecureGetString", true);
-    } else {
-        LOGI("hooks: skipping Settings.Secure.getString hook on ColorOS device");
-    }
+    // Settings.Secure.getString — hooked on all devices. The old ColorOS skip
+    // (LSPlant trampoline crash from iFlytek/Tratao JNI contexts) was an artifact
+    // of the inline-hook era; under a clean single LSPlant hook it no longer
+    // reproduces (validated on OP528F).
+    hook_one(env, hooker_obj, hooker_class,
+        "android/provider/Settings$Secure",
+        "getString",
+        "(Landroid/content/ContentResolver;Ljava/lang/String;)Ljava/lang/String;",
+        "hookSettingsSecureGetString", kCbSig, "backupSettingsSecureGetString", true);
 
     hook_one(env, hooker_obj, hooker_class,
         "android/net/wifi/WifiInfo", "getMacAddress", "()Ljava/lang/String;",

@@ -16,21 +16,6 @@ public class HookerBridge {
 
     private static final String TAG = "payload";
 
-    // On OPPO/realme/OnePlus (all ColorOS), calling Thread.getStackTrace() from within
-    // an LSPlant hook was observed to crash ART's stack walker (SIGSEGV in
-    // GetOatQuickMethodHeader), so a few device-id logs skip stack capture.
-    // NOTE: that crash dates from the era when these methods were DOUBLE-hooked
-    // (inline art_hooks + LSPlant) on OPPO; under a clean single LSPlant hook it may
-    // no longer reproduce. FORCE_OPPO_STACK forces stack capture back on for a
-    // validation build — CI seds the literal below to true when the build.yml
-    // oppo_force_stack input is set. Default false keeps the safe behaviour.
-    private static final boolean FORCE_OPPO_STACK = false; // @oppo_force_stack@
-    private static final boolean OPPO_ART_STACK_UNSAFE =
-            !FORCE_OPPO_STACK && (
-            "OPPO".equalsIgnoreCase(android.os.Build.MANUFACTURER)
-            || "realme".equalsIgnoreCase(android.os.Build.MANUFACTURER)
-            || "OnePlus".equalsIgnoreCase(android.os.Build.MANUFACTURER));
-
     // Abstract Unix domain socket server for adb forward channel.
     // Binds on class load (before any hook fires), so pecker-agent can
     // connect as soon as adb forward is set up — no retry delay needed.
@@ -364,15 +349,6 @@ public class HookerBridge {
         SocketChannel.send(json);
     }
 
-    // Stack-free variant for contexts where captureStack() is unsafe (e.g. OPPO ColorOS).
-    private static void logNoStack(String method, String data) {
-        String json = "{\"type\":\"behavior\",\"method\":\"" + method
-                + "\",\"data\":\"" + jsonEscape(data)
-                + "\",\"stack\":\"\",\"timestamp\":" + System.currentTimeMillis() + "}";
-        Log.i(TAG, json);
-        SocketChannel.send(json);
-    }
-
     private static void logNetwork(String httpMethod, String url, int statusCode) {
         logNetworkFull(httpMethod, url, statusCode, null, null);
     }
@@ -540,14 +516,11 @@ public class HookerBridge {
                 ? safeInvoke(backupSettingsSecureGetString, null, cr, name)
                 : null;
         if ("android_id".equals(name)) {
-            if (OPPO_ART_STACK_UNSAFE) logNoStack("getString_android_id", v != null ? v : "");
-            else log("getString_android_id", v != null ? v : "");
+            log("getString_android_id", v != null ? v : "");
         } else if ("bluetooth_address".equals(name)) {
-            if (OPPO_ART_STACK_UNSAFE) logNoStack("getString_bluetooth_address", v != null ? v : "");
-            else log("getString_bluetooth_address", v != null ? v : "");
+            log("getString_bluetooth_address", v != null ? v : "");
         } else if ("bluetooth_name".equals(name)) {
-            if (OPPO_ART_STACK_UNSAFE) logNoStack("getString_bluetooth_name", v != null ? v : "");
-            else log("getString_bluetooth_name", v != null ? v : "");
+            log("getString_bluetooth_name", v != null ? v : "");
         }
         return v;
     }
