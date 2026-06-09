@@ -17,13 +17,19 @@ public class HookerBridge {
     private static final String TAG = "payload";
 
     // On OPPO/realme/OnePlus (all ColorOS), calling Thread.getStackTrace() from within
-    // an LSPlant hook crashes ART's stack walker (SIGSEGV in GetOatQuickMethodHeader).
-    // For affected devices we skip stack capture in hookSettingsSecureGetString only;
-    // all other hooks remain unaffected.
+    // an LSPlant hook was observed to crash ART's stack walker (SIGSEGV in
+    // GetOatQuickMethodHeader), so a few device-id logs skip stack capture.
+    // NOTE: that crash dates from the era when these methods were DOUBLE-hooked
+    // (inline art_hooks + LSPlant) on OPPO; under a clean single LSPlant hook it may
+    // no longer reproduce. FORCE_OPPO_STACK forces stack capture back on for a
+    // validation build — CI seds the literal below to true when the build.yml
+    // oppo_force_stack input is set. Default false keeps the safe behaviour.
+    private static final boolean FORCE_OPPO_STACK = false; // @oppo_force_stack@
     private static final boolean OPPO_ART_STACK_UNSAFE =
+            !FORCE_OPPO_STACK && (
             "OPPO".equalsIgnoreCase(android.os.Build.MANUFACTURER)
             || "realme".equalsIgnoreCase(android.os.Build.MANUFACTURER)
-            || "OnePlus".equalsIgnoreCase(android.os.Build.MANUFACTURER);
+            || "OnePlus".equalsIgnoreCase(android.os.Build.MANUFACTURER));
 
     // Abstract Unix domain socket server for adb forward channel.
     // Binds on class load (before any hook fires), so pecker-agent can

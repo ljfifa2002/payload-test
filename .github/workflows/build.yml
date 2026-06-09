@@ -10,6 +10,10 @@ on:
         description: 'Build LSPLANT_ONLY variant (disable ColorOS inline ART hooks; for watchdog/LSPlant validation)'
         type: boolean
         default: false
+      oppo_force_stack:
+        description: 'Force stack capture on OPPO (test whether the GetOatQuickMethodHeader crash still reproduces under a clean LSPlant hook)'
+        type: boolean
+        default: false
 
 jobs:
   build:
@@ -40,6 +44,14 @@ jobs:
             app/src/main/cpp/main.cpp
           echo "payload: PAYLOAD_VERSION set to ${VERSION}"
           grep "PAYLOAD_VERSION" app/src/main/cpp/main.cpp
+
+      - name: Force OPPO stack capture (oppo_force_stack)
+        if: ${{ inputs.oppo_force_stack }}
+        run: |
+          echo "::notice::oppo_force_stack — forcing stack capture on OPPO (validation build)"
+          sed -i 's|FORCE_OPPO_STACK = false|FORCE_OPPO_STACK = true|' \
+            app/src/main/java/com/pecker/payload/HookerBridge.java
+          grep "FORCE_OPPO_STACK =" app/src/main/java/com/pecker/payload/HookerBridge.java
 
       - name: Verify LSPlant libraries (committed to repo, no download needed)
         run: |
@@ -148,21 +160,21 @@ jobs:
       - name: Upload arm64-v8a payload libs
         uses: actions/upload-artifact@v4
         with:
-          name: payload-arm64-v8a${{ inputs.lsplant_only && '-lsplant-only' || '' }}
+          name: payload-arm64-v8a${{ inputs.lsplant_only && '-lsplant-only' || '' }}${{ inputs.oppo_force_stack && '-forcestack' || '' }}
           path: app/build/outputs/zips/payload-arm64-v8a.zip
           if-no-files-found: error
 
       - name: Upload armeabi-v7a payload libs
         uses: actions/upload-artifact@v4
         with:
-          name: payload-armeabi-v7a${{ inputs.lsplant_only && '-lsplant-only' || '' }}
+          name: payload-armeabi-v7a${{ inputs.lsplant_only && '-lsplant-only' || '' }}${{ inputs.oppo_force_stack && '-forcestack' || '' }}
           path: app/build/outputs/zips/payload-armeabi-v7a.zip
           if-no-files-found: error
 
       - name: Upload hooker.dex (arch-independent)
         uses: actions/upload-artifact@v4
         with:
-          name: payload-common${{ inputs.lsplant_only && '-lsplant-only' || '' }}
+          name: payload-common${{ inputs.lsplant_only && '-lsplant-only' || '' }}${{ inputs.oppo_force_stack && '-forcestack' || '' }}
           path: app/build/outputs/zips/payload-common.zip
           if-no-files-found: error
 
