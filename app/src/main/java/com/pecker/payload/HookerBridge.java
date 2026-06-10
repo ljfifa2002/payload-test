@@ -308,6 +308,23 @@ public class HookerBridge {
         }
     }
 
+    // Like safeInvokeObject, but TRANSPARENT to exceptions: returns the original's
+    // result on success and RE-THROWS the original's exception on failure instead of
+    // swallowing it to null. Required for hooks whose callers branch on the thrown
+    // exception — e.g. ClassLoader.loadClass: callers do
+    // `loadClass(name).asSubclass(...)` inside try/catch(ClassNotFoundException);
+    // swallowing the CNFE to null makes them NPE on the null .asSubclass().
+    private Object invokeOrRethrow(Method m, Object thiz, Object... params) throws Throwable {
+        try {
+            return m.invoke(thiz, params);
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            throw e.getCause() != null ? e.getCause() : e;
+        } catch (Exception e) {
+            Log.e(TAG, "backup invoke failed: " + e);
+            return null;
+        }
+    }
+
     private static String captureStack() {
         StackTraceElement[] frames = Thread.currentThread().getStackTrace();
         StringBuilder sb = new StringBuilder();
@@ -469,9 +486,12 @@ public class HookerBridge {
     // ---- Phase 12: ClassLoader.loadClass — SDK class collection ----
 
     // ClassLoader.loadClass(String name)  instance: args={thiz, name}
-    public Object hookClassLoaderLoadClass(Object[] args) {
+    public Object hookClassLoaderLoadClass(Object[] args) throws Throwable {
+        // Transparent: return the loaded Class, or re-throw ClassNotFoundException.
+        // Swallowing the CNFE to null makes callers like Cronet's
+        // CronetProvider.addCronetProviderImplByClassName NPE on null.asSubclass().
         Object result = backupClassLoaderLoadClass != null
-                ? safeInvokeObject(backupClassLoaderLoadClass, args[0], args[1])
+                ? invokeOrRethrow(backupClassLoaderLoadClass, args[0], args[1])
                 : null;
         try {
             String name = (String) args[1];
