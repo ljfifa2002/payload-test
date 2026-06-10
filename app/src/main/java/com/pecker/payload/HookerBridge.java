@@ -179,6 +179,7 @@ public class HookerBridge {
     // Phase 7: permissions
     public Method backupRequestPermissions;
     public Method backupActivityCompatRequestPermissions;
+    public Method backupFragmentRequestPermissions;
     // Phase 7b: package install
     public Method backupPackageInstallerCommit;
     // Phase 8: cell info, wifi, package list, tasks, broadcast, media projection
@@ -456,6 +457,12 @@ public class HookerBridge {
                 : null;
         try {
             String name = (String) args[1];
+            // Deferred permission-hook install: when androidx's permission-request
+            // classes finally load, install their hooks (they were skipped at init).
+            if (("androidx.core.app.ActivityCompat".equals(name) && !sActivityCompatPermHooked)
+                    || ("androidx.fragment.app.Fragment".equals(name) && !sFragmentPermHooked)) {
+                if (args[0] instanceof ClassLoader) installPermissionHooksLate((ClassLoader) args[0]);
+            }
             if (name != null && _lcSeen.putIfAbsent(name, Boolean.TRUE) == null) {
                 boolean skip = false;
                 for (String prefix : LC_SYS_PREFIXES) {
@@ -1659,6 +1666,62 @@ public class HookerBridge {
         if (backupActivityCompatRequestPermissions != null)
             safeInvokeObject(backupActivityCompatRequestPermissions, null, args[0], args[1], args[2]);
         return null;
+    }
+
+    // Fragment.requestPermissions(String[], int)  instance: args={thiz, perms, code}
+    // androidx headless-Fragment path used by permission libraries (XXPermissions/PermissionX).
+    public Object hookFragmentRequestPermissions(Object[] args) {
+        try { logPermission("Fragment.requestPermissions", (Object[]) args[1]); }
+        catch (Exception e) { log("Fragment.requestPermissions", "?"); }
+        if (backupFragmentRequestPermissions != null)
+            safeInvokeObject(backupFragmentRequestPermissions, args[0], args[1], args[2]);
+        return null;
+    }
+
+    // Deferred permission-hook install. androidx.core.app.ActivityCompat and
+    // androidx.fragment.app.Fragment are usually NOT loaded when device-id hooks
+    // install at process init, so their hook_one() is skipped ("class not found
+    // optional") and every androidx-routed requestPermissions escapes capture.
+    // Re-attempt via hookNative when those classes actually load (from the
+    // ClassLoader.loadClass hook), once each. cl = the loading ClassLoader.
+    private static volatile boolean sActivityCompatPermHooked = false;
+    private static volatile boolean sFragmentPermHooked = false;
+
+    private static void installPermissionHooksLate(ClassLoader cl) {
+        HookerBridge inst = sInstance;
+        if (inst == null || cl == null) return;
+        if (!sActivityCompatPermHooked) {
+            try {
+                Class<?> c = Class.forName("androidx.core.app.ActivityCompat", false, cl);
+                java.lang.reflect.Method target = c.getDeclaredMethod(
+                        "requestPermissions", android.app.Activity.class, String[].class, int.class);
+                target.setAccessible(true);
+                java.lang.reflect.Method cb = HookerBridge.class.getDeclaredMethod(
+                        "hookActivityCompatRequestPermissions", Object[].class);
+                Object backup = hookNative(target, inst, cb);
+                if (backup instanceof java.lang.reflect.Method) {
+                    inst.backupActivityCompatRequestPermissions = (java.lang.reflect.Method) backup;
+                    sActivityCompatPermHooked = true;
+                    Log.i(TAG, "hooks: ActivityCompat.requestPermissions hooked (late)");
+                }
+            } catch (Throwable ignored) {}
+        }
+        if (!sFragmentPermHooked) {
+            try {
+                Class<?> c = Class.forName("androidx.fragment.app.Fragment", false, cl);
+                java.lang.reflect.Method target = c.getDeclaredMethod(
+                        "requestPermissions", String[].class, int.class);
+                target.setAccessible(true);
+                java.lang.reflect.Method cb = HookerBridge.class.getDeclaredMethod(
+                        "hookFragmentRequestPermissions", Object[].class);
+                Object backup = hookNative(target, inst, cb);
+                if (backup instanceof java.lang.reflect.Method) {
+                    inst.backupFragmentRequestPermissions = (java.lang.reflect.Method) backup;
+                    sFragmentPermHooked = true;
+                    Log.i(TAG, "hooks: Fragment.requestPermissions hooked (late)");
+                }
+            } catch (Throwable ignored) {}
+        }
     }
 
     // PackageInstaller.Session.commit(IntentSender)  instance: args={thiz, statusReceiver}
