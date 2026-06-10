@@ -555,11 +555,139 @@ public class HookerBridge {
         // Log the activity class name in unified JSON format
         String activityName = thiz != null ? thiz.getClass().getName() : "?";
         log("Activity.onCreate", activityName);
+        scheduleScreenScan(thiz);
         if (backupActivityOnCreate != null) {
             try { backupActivityOnCreate.invoke(thiz, bundle); }
             catch (Exception e) { Log.e(TAG, "backup Activity.onCreate failed: " + e); }
         }
         return null;
+    }
+
+    // ===================================================================
+    // Auto-screenshot UI classification — ported from detect-assistant
+    // (UIViewClassifier / UiViewText). After an Activity.onCreate, scan its
+    // view tree (once laid out), classify the screen, and emit a "ui_signal"
+    // so pecker-agent grabs a WindowType-tagged screenshot. This is the SINGLE
+    // authority for content WindowTypes (privacy_* / default_agree / sign_in);
+    // the "permission" WindowType is handled agent-side off the requestPermissions
+    // hook event, so this code must NOT emit "permission".
+    //
+    // Keyword matching strips whitespace first (so "同 意" anti-detection spacing
+    // collapses to "同意"), which replaces detect-assistant's "\s+" regex variants.
+    // ===================================================================
+    private static final String[] PRIVACY_WORDS = {
+        "隐私政策","隐私条款","隐私协议","隐私权政策","隐私权保护政策","隐私保护提示",
+        "个人信息保护指引","个人信息保护政策","隐私保护指引","隐私权保护指引","隐私保护政策","隐私声明"
+    };
+    private static final String[] AGREE_WORDS     = {"同意","接受"};
+    private static final String[] REFUSE_WORDS    = {"不同意","仅浏览","退出","放弃","再想想","拒绝","暂不使用","取消"};
+    private static final String[] SIGN_BTN_WORDS  = {"登录","登陆","获取验证码","确认"};
+    private static final String[] SIGN_USER_WORDS = {"账号","用户名","手机号","username"};
+    private static final String[] SIGN_PASS_WORDS = {"密码","验证码","password"};
+
+    // Per-process dedup (= per APK task: each task force-stops + relaunches, so a
+    // fresh process starts with an empty set). Mirrors detect-assistant commitWindow.
+    private static final java.util.Set<String> committedWindows =
+        java.util.Collections.synchronizedSet(new java.util.HashSet<String>());
+    private static android.os.Handler uiScanHandler;
+
+    private static void scheduleScreenScan(final Object activity) {
+        if (!(activity instanceof android.app.Activity)) return;
+        try {
+            if (uiScanHandler == null) {
+                uiScanHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+            }
+            // Delay so the view tree is laid out and any privacy/login dialog has attached.
+            uiScanHandler.postDelayed(new Runnable() {
+                @Override public void run() {
+                    try { scanScreen((android.app.Activity) activity); }
+                    catch (Throwable t) { Log.e(TAG, "ui scan failed: " + t); }
+                }
+            }, 700);
+        } catch (Throwable t) { Log.e(TAG, "scheduleScreenScan failed: " + t); }
+    }
+
+    private static final class UiAcc {
+        boolean privacyPolicy, hasAgree, hasRefuse, hasUser, hasPass, hasSignBtn;
+        Boolean checkboxChecked; // null = no "同意" checkbox seen
+        void put(String raw) {
+            String s = raw.replaceAll("\\s+", "");
+            if (s.length() < 2) return;
+            if (!privacyPolicy && containsAny(s, PRIVACY_WORDS)) privacyPolicy = true;
+            if (!hasAgree  && containsAny(s, AGREE_WORDS))  hasAgree  = true;
+            if (!hasRefuse && containsAny(s, REFUSE_WORDS)) hasRefuse = true;
+            if (s.length() < 10) {
+                if (!hasUser    && containsAny(s, SIGN_USER_WORDS)) hasUser    = true;
+                if (!hasPass    && containsAny(s, SIGN_PASS_WORDS)) hasPass    = true;
+                if (!hasSignBtn && containsAny(s, SIGN_BTN_WORDS))  hasSignBtn = true;
+            }
+        }
+    }
+
+    private static boolean containsAny(String s, String[] keys) {
+        for (String k : keys) if (s.contains(k)) return true;
+        return false;
+    }
+
+    private static void scanScreen(android.app.Activity act) {
+        if (act.getWindow() == null) return;
+        android.view.View root = act.getWindow().getDecorView();
+        if (root == null) return;
+        UiAcc acc = new UiAcc();
+        walk(root, acc);
+
+        // Privacy classification (once): a compliant popup must show BOTH an
+        // agree-class and a refuse-class control, else it is flagged no_privacy_*.
+        if (acc.privacyPolicy && committedWindows.add("__privacy_pair__")) {
+            if (acc.hasAgree && acc.hasRefuse) {
+                emitUiSignal("privacy_tips", "");
+                emitUiSignal("privacy_agree", "");
+            } else {
+                emitUiSignal("no_privacy_tips", "");
+                emitUiSignal("no_privacy_agree", "");
+            }
+        }
+        // Default-agree checkbox: a "同意…" checkbox pre-checked on a privacy page
+        // is non-compliant.
+        if (acc.privacyPolicy && acc.checkboxChecked != null && committedWindows.add("__default_agree__")) {
+            emitUiSignal(acc.checkboxChecked ? "default_agree" : "no_default_agree", "");
+        }
+        // Sign-in window: account field + password field + login button all present.
+        if (acc.hasUser && acc.hasPass && acc.hasSignBtn && committedWindows.add("sign_in")) {
+            emitUiSignal("sign_in", "");
+        }
+    }
+
+    private static void walk(android.view.View v, UiAcc acc) {
+        if (v == null) return;
+        CharSequence cs = null;
+        if (v instanceof android.widget.TextView) cs = ((android.widget.TextView) v).getText();
+        if (cs == null) cs = v.getContentDescription();
+        if (cs != null) {
+            String txt = cs.toString();
+            if (!txt.trim().isEmpty()) {
+                acc.put(txt);
+                // CompoundButton extends TextView; record its checked state if its
+                // own label contains "同意" (resolved against privacyPolicy later).
+                if (v instanceof android.widget.CompoundButton
+                        && txt.replaceAll("\\s+", "").contains("同意")) {
+                    acc.checkboxChecked = ((android.widget.CompoundButton) v).isChecked();
+                }
+            }
+        }
+        if (v instanceof android.view.ViewGroup) {
+            android.view.ViewGroup g = (android.view.ViewGroup) v;
+            int n = g.getChildCount();
+            for (int i = 0; i < n; i++) walk(g.getChildAt(i), acc);
+        }
+    }
+
+    private static void emitUiSignal(String windowType, String comments) {
+        String json = "{\"type\":\"ui_signal\",\"windowType\":\"" + jsonEscape(windowType)
+                + "\",\"comments\":\"" + jsonEscape(comments)
+                + "\",\"delayMs\":0,\"timestamp\":" + System.currentTimeMillis() + "}";
+        Log.i(TAG, json);
+        SocketChannel.send(json);
     }
 
     // LocationManager.getLastKnownLocation(String provider)  instance: args={thiz, provider}
