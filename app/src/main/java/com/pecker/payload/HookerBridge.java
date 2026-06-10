@@ -590,21 +590,120 @@ public class HookerBridge {
     private static final java.util.Set<String> committedWindows =
         java.util.Collections.synchronizedSet(new java.util.HashSet<String>());
     private static android.os.Handler uiScanHandler;
+    private static boolean uiScanStarted = false;          // loop started once per process
+    private static java.lang.ref.WeakReference<android.app.Activity> lastActivity;
+    // Re-scan over a launch window (mirrors detect-assistant LAUNCH_MAX_DELAY_MIL=10s):
+    // the startup privacy popup is shown asynchronously after SDK/network init, so a
+    // single fixed-delay scan misses it. Scan every interval until the window ends.
+    private static final int UI_SCAN_INTERVAL_MS = 1500;
+    private static final int UI_SCAN_MAX_MS      = 10000;
+
+    // Only the main UI process shows privacy/permission/login dialogs. Sub
+    // processes (:channel, :push, :webview …) are injected too and would each
+    // run the scan and emit the same ui_signal — N copies that the agent then
+    // has to dedup. Gate the scan to the main process (cmdline has no ':'),
+    // killing the duplicates at the source. /proc/self/cmdline reflects
+    // setArgV0 and is reliable by Activity.onCreate time (System.getenv caches
+    // environ at JVM start, so NCORE_PROCESS_NAME is not).
+    private static boolean isSubProcess() {
+        try (java.io.RandomAccessFile f = new java.io.RandomAccessFile("/proc/self/cmdline", "r")) {
+            byte[] buf = new byte[256];
+            int n = f.read(buf);
+            if (n > 0) {
+                int end = 0;
+                while (end < n && buf[end] != 0) end++;
+                return new String(buf, 0, end, StandardCharsets.UTF_8).contains(":");
+            }
+        } catch (Exception ignored) {}
+        return false; // unknown → treat as main, don't over-suppress
+    }
 
     private static void scheduleScreenScan(final Object activity) {
         if (!(activity instanceof android.app.Activity)) return;
+        if (isSubProcess()) return;
+        lastActivity = new java.lang.ref.WeakReference<>((android.app.Activity) activity); // fallback target, kept current
+        synchronized (HookerBridge.class) {
+            if (uiScanStarted) return;   // one launch-scan loop per process
+            uiScanStarted = true;
+        }
         try {
             if (uiScanHandler == null) {
                 uiScanHandler = new android.os.Handler(android.os.Looper.getMainLooper());
             }
-            // Delay so the view tree is laid out and any privacy/login dialog has attached.
-            uiScanHandler.postDelayed(new Runnable() {
-                @Override public void run() {
-                    try { scanScreen((android.app.Activity) activity); }
-                    catch (Throwable t) { Log.e(TAG, "ui scan failed: " + t); }
-                }
-            }, 700);
+            scanLoopTick(0);
         } catch (Throwable t) { Log.e(TAG, "scheduleScreenScan failed: " + t); }
+    }
+
+    // Re-scan every interval until the launch window ends. Positives are emitted as
+    // soon as seen; the negative baseline is emitted ONLY on the final (timed-out)
+    // tick, and only if no privacy popup was ever confirmed — so an early scan of a
+    // pre-popup screen (e.g. a "隐私政策" footer link) can't prematurely lock in the
+    // negative and block the real dialog.
+    private static void scanLoopTick(final int elapsedMs) {
+        uiScanHandler.postDelayed(new Runnable() {
+            @Override public void run() {
+                int next = elapsedMs + UI_SCAN_INTERVAL_MS;
+                boolean timedOut = next >= UI_SCAN_MAX_MS;
+                try { scanAllWindows(timedOut); }
+                catch (Throwable t) { Log.e(TAG, "ui scan failed: " + t); }
+                if (!timedOut) scanLoopTick(next);
+            }
+        }, UI_SCAN_INTERVAL_MS);
+    }
+
+    // Enumerate EVERY window root in this process (activities + dialogs + popups) via
+    // WindowManagerGlobal.mViews. A privacy Dialog has its OWN window, so the launcher
+    // Activity's decorView would never contain it — this is the in-app equivalent of
+    // detect-assistant's accessibility getWindows(). Falls back to the latest
+    // Activity's decorView if the hidden field is unavailable.
+    @SuppressWarnings("unchecked")
+    private static java.util.List<android.view.View> getWindowRoots() {
+        try {
+            Class<?> cls = Class.forName("android.view.WindowManagerGlobal");
+            Object wmg = cls.getMethod("getInstance").invoke(null);
+            java.lang.reflect.Field f = cls.getDeclaredField("mViews");
+            f.setAccessible(true);
+            Object v = f.get(wmg);
+            if (v instanceof java.util.List) {
+                return new java.util.ArrayList<>((java.util.List<android.view.View>) v); // copy: avoid CME
+            }
+            if (v instanceof android.view.View[]) {
+                return new java.util.ArrayList<>(java.util.Arrays.asList((android.view.View[]) v));
+            }
+        } catch (Throwable ignored) {}
+        // Fallback: just the latest activity's decorView (misses dialog windows).
+        java.util.List<android.view.View> out = new java.util.ArrayList<>();
+        android.app.Activity a = lastActivity != null ? lastActivity.get() : null;
+        if (a != null && a.getWindow() != null && a.getWindow().getDecorView() != null) {
+            out.add(a.getWindow().getDecorView());
+        }
+        return out;
+    }
+
+    private static void scanAllWindows(boolean timedOut) {
+        UiAcc acc = new UiAcc();
+        for (android.view.View root : getWindowRoots()) walk(root, acc);
+
+        // Positive: emit the moment a real privacy popup (text + agree + refuse) is seen.
+        if (acc.privacyPolicy && acc.hasAgree && acc.hasRefuse && committedWindows.add("__privacy_pair__")) {
+            emitUiSignal("privacy_tips", "");
+            emitUiSignal("privacy_agree", "");
+        }
+        // Default-agree checkbox: a "同意…" checkbox pre-checked on a privacy page is non-compliant.
+        if (acc.privacyPolicy && acc.checkboxChecked != null && committedWindows.add("__default_agree__")) {
+            emitUiSignal(acc.checkboxChecked ? "default_agree" : "no_default_agree", "");
+        }
+        // Sign-in window: account field + password field + login button all present.
+        if (acc.hasUser && acc.hasPass && acc.hasSignBtn && committedWindows.add("sign_in")) {
+            emitUiSignal("sign_in", "");
+        }
+        // Negative baseline (guaranteed launch screenshot): only on the final tick, and
+        // only if no privacy popup was ever confirmed. add() returns false if the
+        // positive already claimed "__privacy_pair__", so this won't double-fire.
+        if (timedOut && committedWindows.add("__privacy_pair__")) {
+            emitUiSignal("no_privacy_tips", "");
+            emitUiSignal("no_privacy_agree", "");
+        }
     }
 
     private static final class UiAcc {
@@ -627,35 +726,6 @@ public class HookerBridge {
     private static boolean containsAny(String s, String[] keys) {
         for (String k : keys) if (s.contains(k)) return true;
         return false;
-    }
-
-    private static void scanScreen(android.app.Activity act) {
-        if (act.getWindow() == null) return;
-        android.view.View root = act.getWindow().getDecorView();
-        if (root == null) return;
-        UiAcc acc = new UiAcc();
-        walk(root, acc);
-
-        // Privacy classification (once): a compliant popup must show BOTH an
-        // agree-class and a refuse-class control, else it is flagged no_privacy_*.
-        if (acc.privacyPolicy && committedWindows.add("__privacy_pair__")) {
-            if (acc.hasAgree && acc.hasRefuse) {
-                emitUiSignal("privacy_tips", "");
-                emitUiSignal("privacy_agree", "");
-            } else {
-                emitUiSignal("no_privacy_tips", "");
-                emitUiSignal("no_privacy_agree", "");
-            }
-        }
-        // Default-agree checkbox: a "同意…" checkbox pre-checked on a privacy page
-        // is non-compliant.
-        if (acc.privacyPolicy && acc.checkboxChecked != null && committedWindows.add("__default_agree__")) {
-            emitUiSignal(acc.checkboxChecked ? "default_agree" : "no_default_agree", "");
-        }
-        // Sign-in window: account field + password field + login button all present.
-        if (acc.hasUser && acc.hasPass && acc.hasSignBtn && committedWindows.add("sign_in")) {
-            emitUiSignal("sign_in", "");
-        }
     }
 
     private static void walk(android.view.View v, UiAcc acc) {
