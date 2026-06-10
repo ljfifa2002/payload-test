@@ -180,6 +180,7 @@ public class HookerBridge {
     public Method backupRequestPermissions;
     public Method backupActivityCompatRequestPermissions;
     public Method backupFragmentRequestPermissions;
+    public Method backupFrameworkFragmentRequestPermissions;
     // Phase 7b: package install
     public Method backupPackageInstallerCommit;
     // Phase 8: cell info, wifi, package list, tasks, broadcast, media projection
@@ -1675,6 +1676,16 @@ public class HookerBridge {
         catch (Exception e) { log("Fragment.requestPermissions", "?"); }
         if (backupFragmentRequestPermissions != null)
             safeInvokeObject(backupFragmentRequestPermissions, args[0], args[1], args[2]);
+        return null;
+    }
+
+    // android.app.Fragment.requestPermissions(String[], int)  instance: args={thiz, perms, code}
+    // Framework (deprecated) Fragment; emits the same "Fragment.requestPermissions" key.
+    public Object hookFrameworkFragmentRequestPermissions(Object[] args) {
+        try { logPermission("Fragment.requestPermissions", (Object[]) args[1]); }
+        catch (Exception e) { log("Fragment.requestPermissions", "?"); }
+        if (backupFrameworkFragmentRequestPermissions != null)
+            safeInvokeObject(backupFrameworkFragmentRequestPermissions, args[0], args[1], args[2]);
         return null;
     }
 

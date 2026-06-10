@@ -598,6 +598,16 @@ void install_device_id_hooks(JNIEnv* env) {
         "hookActivityCompatRequestPermissions", kCbSig,
         "backupActivityCompatRequestPermissions", true, true);
 
+    // android.app.Fragment.requestPermissions — framework (deprecated) Fragment,
+    // bootclasspath so present at init. Used by older permission libs (early
+    // XXPermissions) and platform-Fragment apps; the androidx Fragment is hooked
+    // late from the ClassLoader.loadClass hook instead.
+    hook_one(env, hooker_obj, hooker_class,
+        "android/app/Fragment", "requestPermissions",
+        "([Ljava/lang/String;I)V",
+        "hookFrameworkFragmentRequestPermissions", kCbSig,
+        "backupFrameworkFragmentRequestPermissions", false, true);
+
     // Phase 7b: PackageInstaller.Session.commit
     hook_one(env, hooker_obj, hooker_class,
         "android/content/pm/PackageInstaller$Session", "commit",
