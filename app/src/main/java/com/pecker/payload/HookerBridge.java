@@ -291,6 +291,23 @@ public class HookerBridge {
         catch (Exception e) { Log.e(TAG, "backup invoke object failed: " + e); return null; }
     }
 
+    // For CONSTRUCTOR (<init>) hooks: run the original constructor, but if it throws,
+    // re-throw the ORIGINAL exception instead of swallowing it. Swallowing a constructor
+    // failure (e.g. FileNotFoundException on a missing/cache-miss path) hands the caller a
+    // half-constructed object — a FileInputStream/FileOutputStream whose FileDescriptor is
+    // still null — which later aborts the whole process (ART GetIntField on a null fd during
+    // e.g. image decode). Re-throwing makes the hook transparent: the caller sees exactly
+    // what an un-hooked constructor would have thrown.
+    private void invokeCtorOrRethrow(Method m, Object thiz, Object... params) throws Throwable {
+        try {
+            m.invoke(thiz, params);
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            throw e.getCause() != null ? e.getCause() : e;
+        } catch (Exception e) {
+            Log.e(TAG, "ctor backup invoke failed: " + e);
+        }
+    }
+
     private static String captureStack() {
         StackTraceElement[] frames = Thread.currentThread().getStackTrace();
         StringBuilder sb = new StringBuilder();
@@ -1929,56 +1946,59 @@ public class HookerBridge {
     }
 
     // FileInputStream(String path)  instance: args={thiz, path}
-    public Object hookFileInputStreamStr(Object[] args) {
-        if (backupFileInputStreamStr != null)
-            safeInvokeObject(backupFileInputStreamStr, args[0], args[1]);
+    // Log the open attempt FIRST, then run the original <init>, re-throwing any
+    // exception (see invokeCtorOrRethrow) so a missing-file open never yields a
+    // half-constructed stream with a null FileDescriptor.
+    public Object hookFileInputStreamStr(Object[] args) throws Throwable {
         String path = args[1] != null ? args[1].toString() : "";
         if (isExternalStorage(path)) log("FileInputStream.read", path);
+        if (backupFileInputStreamStr != null)
+            invokeCtorOrRethrow(backupFileInputStreamStr, args[0], args[1]);
         return null;
     }
 
     // FileInputStream(File file)  instance: args={thiz, file}
-    public Object hookFileInputStreamFile(Object[] args) {
-        if (backupFileInputStreamFile != null)
-            safeInvokeObject(backupFileInputStreamFile, args[0], args[1]);
+    public Object hookFileInputStreamFile(Object[] args) throws Throwable {
         String path = fileArgToPath(args[1]);
         if (isExternalStorage(path)) log("FileInputStream.read", path);
+        if (backupFileInputStreamFile != null)
+            invokeCtorOrRethrow(backupFileInputStreamFile, args[0], args[1]);
         return null;
     }
 
     // FileOutputStream(String path)  instance: args={thiz, path}
-    public Object hookFileOutputStreamStr(Object[] args) {
-        if (backupFileOutputStreamStr != null)
-            safeInvokeObject(backupFileOutputStreamStr, args[0], args[1]);
+    public Object hookFileOutputStreamStr(Object[] args) throws Throwable {
         String path = args[1] != null ? args[1].toString() : "";
         if (isExternalStorage(path)) log("FileOutputStream.write", path);
+        if (backupFileOutputStreamStr != null)
+            invokeCtorOrRethrow(backupFileOutputStreamStr, args[0], args[1]);
         return null;
     }
 
     // FileOutputStream(String path, boolean append)  instance: args={thiz, path, append}
-    public Object hookFileOutputStreamStrAppend(Object[] args) {
-        if (backupFileOutputStreamStrAppend != null)
-            safeInvokeObject(backupFileOutputStreamStrAppend, args[0], args[1], args[2]);
+    public Object hookFileOutputStreamStrAppend(Object[] args) throws Throwable {
         String path = args[1] != null ? args[1].toString() : "";
         if (isExternalStorage(path)) log("FileOutputStream.write", path);
+        if (backupFileOutputStreamStrAppend != null)
+            invokeCtorOrRethrow(backupFileOutputStreamStrAppend, args[0], args[1], args[2]);
         return null;
     }
 
     // FileOutputStream(File file)  instance: args={thiz, file}
-    public Object hookFileOutputStreamFile(Object[] args) {
-        if (backupFileOutputStreamFile != null)
-            safeInvokeObject(backupFileOutputStreamFile, args[0], args[1]);
+    public Object hookFileOutputStreamFile(Object[] args) throws Throwable {
         String path = fileArgToPath(args[1]);
         if (isExternalStorage(path)) log("FileOutputStream.write", path);
+        if (backupFileOutputStreamFile != null)
+            invokeCtorOrRethrow(backupFileOutputStreamFile, args[0], args[1]);
         return null;
     }
 
     // FileOutputStream(File file, boolean append)  instance: args={thiz, file, append}
-    public Object hookFileOutputStreamFileAppend(Object[] args) {
-        if (backupFileOutputStreamFileAppend != null)
-            safeInvokeObject(backupFileOutputStreamFileAppend, args[0], args[1], args[2]);
+    public Object hookFileOutputStreamFileAppend(Object[] args) throws Throwable {
         String path = fileArgToPath(args[1]);
         if (isExternalStorage(path)) log("FileOutputStream.write", path);
+        if (backupFileOutputStreamFileAppend != null)
+            invokeCtorOrRethrow(backupFileOutputStreamFileAppend, args[0], args[1], args[2]);
         return null;
     }
 
@@ -2369,10 +2389,11 @@ public class HookerBridge {
     // args = {thiz, ...params...}  param count varies by WeChat version (>=6)
     // taskId is args[args.length-2], apiName is args[args.length-1]
     public Object hookXf1QQ(Object[] args) {
+        Object result = null;
         if (backupXf1QQ != null) {
             try {
                 Object[] reflArgs = java.util.Arrays.copyOfRange(args, 1, args.length);
-                backupXf1QQ.invoke(args[0], reflArgs);
+                result = backupXf1QQ.invoke(args[0], reflArgs);
             } catch (Exception e) { Log.e(TAG, "backup invoke object failed: " + e); }
         }
         try {
@@ -2391,7 +2412,7 @@ public class HookerBridge {
         } catch (Exception e) {
             Log.w(TAG, "hookXf1QQ failed: " + e);
         }
-        return null;
+        return result;
     }
 
     // Called by C++ LSPlant for xf1.q.d (response callback).
