@@ -1150,17 +1150,33 @@ public class HookerBridge {
 
     // ContextWrapper.startActivity(Intent) — covers Custom Tabs and Context-level calls.
     // instance: args={thiz, intent}
+    // Emits the same self/other behavior as the Activity-level hooks: apps that
+    // launch another app via a non-Activity context (e.g. the WeChat OpenSDK's
+    // MMessageActV2.send() uses the application context → ContextWrapper.startActivity)
+    // would otherwise be missed for "关联启动" / startupothers detection.
     public Object hookContextStartActivity(Object[] args) {
-        logIntentDebug("ContextWrapper.startActivity(I)", args[0], args.length > 1 ? args[1] : null);
-        if (args.length > 1) checkIntentViewUrl(args[1]);
+        Object intent = args.length > 1 ? args[1] : null;
+        String targetPkg = getIntentPackage(intent);
+        String currentPkg = getCurrentPackage(args[0]);
+        String key = (targetPkg != null && !targetPkg.isEmpty() && !targetPkg.equals(currentPkg))
+                ? "Activity.startActivity_other" : "Activity.startActivity_self";
+        log(key, targetPkg != null ? targetPkg : "");
+        logIntentDebug("ContextWrapper.startActivity(I)", args[0], intent);
+        if (intent != null) checkIntentViewUrl(intent);
         return safeInvokeObject(backupContextStartActivity, args[0], args[1]);
     }
 
     // ContextWrapper.startActivity(Intent, Bundle) — two-arg variant (API 16+).
     // instance: args={thiz, intent, options}
     public Object hookContextStartActivityWithOptions(Object[] args) {
-        logIntentDebug("ContextWrapper.startActivity(IB)", args[0], args.length > 1 ? args[1] : null);
-        if (args.length > 1) checkIntentViewUrl(args[1]);
+        Object intent = args.length > 1 ? args[1] : null;
+        String targetPkg = getIntentPackage(intent);
+        String currentPkg = getCurrentPackage(args[0]);
+        String key = (targetPkg != null && !targetPkg.isEmpty() && !targetPkg.equals(currentPkg))
+                ? "Activity.startActivity_other" : "Activity.startActivity_self";
+        log(key, targetPkg != null ? targetPkg : "");
+        logIntentDebug("ContextWrapper.startActivity(IB)", args[0], intent);
+        if (intent != null) checkIntentViewUrl(intent);
         return safeInvokeObject(backupContextStartActivityWithOptions, args[0],
             args.length > 1 ? args[1] : null, args.length > 2 ? args[2] : null);
     }
@@ -1171,6 +1187,12 @@ public class HookerBridge {
             Object component = intent.getClass().getMethod("getComponent").invoke(intent);
             if (component != null)
                 return (String) component.getClass().getMethod("getPackageName").invoke(component);
+        } catch (Exception ignored) {}
+        // Fallback: an intent.setPackage()-only target (no explicit component)
+        // still identifies a cross-app launch (e.g. waking another app by package).
+        try {
+            Object pkg = intent.getClass().getMethod("getPackage").invoke(intent);
+            if (pkg != null) return (String) pkg;
         } catch (Exception ignored) {}
         return null;
     }
