@@ -2358,6 +2358,17 @@ public class HookerBridge {
                     dumpObjectFields("mini_launch_arg[" + i + "]", args[i]);
                 }
             }
+            // Capture the build number eagerly here. QualitySession sits at arg[1].h2 (depth 1)
+            // and is always populated at launch, unlike the icon (loads later) or the jsapi
+            // container path (where QualitySession isn't always reachable). Cache to g_mini_ver
+            // so the full send carries the version regardless of which path/timing wins.
+            if (g_mini_ver.isEmpty()) {
+                for (Object a : args) {
+                    if (a == null) continue;
+                    String v = findMiniVersion(a);
+                    if (!v.isEmpty()) { g_mini_ver = v; break; }
+                }
+            }
             // Pass 1: toString() patterns over every arg. Pattern A (runtime) → appId+brand
             // partial; Pattern B (config) → also iconUrl.
             for (Object a : args) {
@@ -2713,10 +2724,15 @@ public class HookerBridge {
         // icon-bearing send that arrived with an empty brand (value-scan path).
         if (!brand.isEmpty()) g_mini_brand = brand;
         else if (!g_mini_brand.isEmpty()) brand = g_mini_brand;
+        // Build number is captured eagerly in the F0 hook (g_mini_ver, authoritative). A send
+        // arriving with an empty ver (e.g. the jsapi path where QualitySession isn't reachable)
+        // reuses it; a non-empty ver only seeds g_mini_ver when nothing was captured yet.
+        if (g_mini_ver.isEmpty() && !ver.isEmpty()) g_mini_ver = ver;
+        if (!g_mini_ver.isEmpty()) ver = g_mini_ver;
         if (g_mini_launch_full) return;           // already sent complete data
         if (g_mini_launch_sent && !hasFull) return; // already sent partial, this is also partial
         g_mini_launch_sent = true;
-        if (hasFull) { g_mini_launch_full = true; g_mini_icon = icon; g_mini_ver = ver; }
+        if (hasFull) { g_mini_launch_full = true; g_mini_icon = icon; }
         emitMiniLaunch(appId, brand, icon, ver, username, g_mini_publiclib,
                 hasFull ? "full" : "partial");
     }
