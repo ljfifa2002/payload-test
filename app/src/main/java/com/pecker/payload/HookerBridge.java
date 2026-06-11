@@ -2367,7 +2367,7 @@ public class HookerBridge {
                 if (g_mini_launch_full) break;
                 if (a == null) continue;
                 String[] hit = findMiniIcon(a, g_mini_appId.isEmpty() ? null : g_mini_appId);
-                if (hit != null) sendMiniLaunch(hit[0], "", hit[1], "", "");
+                if (hit != null) sendMiniLaunch(hit[0], "", hit[1], "", findMiniVersion(a));
             }
         } catch (Exception e) {
             Log.w(TAG, "hookAppBrandRuntimeM0 failed: " + e);
@@ -2454,7 +2454,7 @@ public class HookerBridge {
                     // d=appId / f=iconUrl pair rather than a host component's.
                     if (!g_mini_launch_full) {
                         String[] hit = findMiniIcon(container, g_mini_appId.isEmpty() ? null : g_mini_appId);
-                        if (hit != null) sendMiniLaunch(hit[0], "", hit[1], "", "");
+                        if (hit != null) sendMiniLaunch(hit[0], "", hit[1], "", findMiniVersion(container));
                     }
                 }
             } catch (Exception e) {
@@ -2830,6 +2830,101 @@ public class HookerBridge {
                             && !v.getClass().getName().startsWith("java.")
                             && !v.getClass().getName().startsWith("android.")) {
                         String[] r = findMiniIconDeep(v, wantAppId, depth + 1, seen, budget);
+                        if (r != null) return r;
+                    }
+                } catch (Exception ignored) {}
+            }
+            cls = cls.getSuperclass();
+        }
+        return null;
+    }
+
+    // ── Option B: mini-program version (appVersion) ──────────────────────────────
+    // This WeChat version no longer exposes the version on the AppBrandInitConfig
+    // (AppBrandInitConfigLU field "J" is now a boolean), so detect-assistant's hardcoded
+    // getField("J") fails here. The published version DOES appear deeper in the config
+    // graph inside a WxaAttributes/package-info object as a semver String (e.g. e="6.7.31"
+    // next to a package md5). Match it by value: an entire field value of the form X.Y.Z.
+
+    // True when s is exactly X.Y.Z (optionally v-prefixed), 1-4 digit components — a
+    // mini-program version. Three components excludes IPs (four) and arbitrary text.
+    private static boolean isVersionString(String s) {
+        if (s == null || s.isEmpty()) return false;
+        String t = (s.charAt(0) == 'v' || s.charAt(0) == 'V') ? s.substring(1) : s;
+        if (t.isEmpty() || t.length() > 20) return false;
+        int dots = 0;
+        for (int i = 0; i < t.length(); i++) {
+            char c = t.charAt(i);
+            if (c == '.') dots++;
+            else if (c < '0' || c > '9') return false;
+        }
+        return dots == 2;
+    }
+
+    // 32-char lowercase hex (a package md5) — used together with the semver to pin the
+    // WxaAttributes version-info object, which carries appVersion(int) + versionDesc(semver)
+    // + versionMd5 together.
+    private static boolean isMd5Hex(String s) {
+        if (s == null || s.length() != 32) return false;
+        for (int i = 0; i < 32; i++) {
+            char c = s.charAt(i);
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+        }
+        return true;
+    }
+
+    // The mini-program version reported as appVersion is the INTEGER build number (e.g. 1035),
+    // NOT the semver desc (6.7.31). It lives on a WxaAttributes object that also holds the
+    // version semver and a package md5. Pin that object by {semver + md5}, then return its
+    // first build-number-range integer field — version-independent (no field-name reliance).
+    // Called on the same arg whose icon was matched, so the version is the target program's.
+    private static String findMiniVersion(Object obj) {
+        String v = findMiniVersionDeep(obj, 0,
+                new java.util.IdentityHashMap<Object, Boolean>(), new int[]{0});
+        if (v != null) { Log.i(TAG, "findMiniVersion: " + v); return v; }
+        return "";
+    }
+
+    private static String findMiniVersionDeep(Object obj, int depth,
+            java.util.IdentityHashMap<Object, Boolean> seen, int[] budget) {
+        if (obj == null || depth > 4 || budget[0] > 6000) return null;
+        if (seen.put(obj, Boolean.TRUE) != null) return null;
+        // Is THIS the version-info object (has a semver desc AND a package md5)? If so its
+        // first build-number-range int is the appVersion.
+        boolean hasSemver = false, hasMd5 = false;
+        String intVer = null;
+        Class<?> cls = obj.getClass();
+        while (cls != null && !cls.equals(Object.class)) {
+            for (java.lang.reflect.Field f : cls.getDeclaredFields()) {
+                if (++budget[0] > 6000) break;
+                try {
+                    f.setAccessible(true);
+                    Object v = f.get(obj);
+                    if (v instanceof String) {
+                        String s = (String) v;
+                        if (isVersionString(s)) hasSemver = true;
+                        else if (isMd5Hex(s)) hasMd5 = true;
+                    } else if (v instanceof Integer && intVer == null) {
+                        int iv = (Integer) v;
+                        if (iv > 0 && iv < 1000000) intVer = String.valueOf(iv);
+                    }
+                } catch (Exception ignored) {}
+            }
+            cls = cls.getSuperclass();
+        }
+        if (hasSemver && hasMd5 && intVer != null) return intVer;
+        // recurse into nested non-framework object fields
+        cls = obj.getClass();
+        while (cls != null && !cls.equals(Object.class)) {
+            for (java.lang.reflect.Field f : cls.getDeclaredFields()) {
+                try {
+                    f.setAccessible(true);
+                    Object v = f.get(obj);
+                    if (v != null && !(v instanceof String) && !(v instanceof Number)
+                            && !(v instanceof Boolean) && !v.getClass().isArray()
+                            && !v.getClass().getName().startsWith("java.")
+                            && !v.getClass().getName().startsWith("android.")) {
+                        String r = findMiniVersionDeep(v, depth + 1, seen, budget);
                         if (r != null) return r;
                     }
                 } catch (Exception ignored) {}
