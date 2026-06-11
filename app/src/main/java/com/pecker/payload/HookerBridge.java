@@ -2322,6 +2322,9 @@ public class HookerBridge {
     // Brand carried over from a partial send so an icon-bearing full send (which may
     // arrive with an empty brand from the value-scan path) keeps the mini-program name.
     private volatile String  g_mini_brand        = "";
+    // First mini-program's appId. Once locked, other appbrand components (e.g. the
+    // 官方半屏承载 half-screen host) are ignored so appId and icon never get mixed.
+    private volatile String  g_mini_appId        = "";
     // One-shot field dump of the AppBrandRuntime/AppBrandInitConfig args for diagnosis.
     private volatile boolean g_mini_launch_dumped = false;
 
@@ -2357,14 +2360,14 @@ public class HookerBridge {
                 String[] info = parseMiniLaunchInfo(a.toString());
                 if (info != null) sendMiniLaunch(info[0], info[1], info[2], info[3], info[4]);
             }
-            // Pass 2: recursive value-scan over every arg — including args[0] (the runtime),
-            // which holds the nested AppBrandInitConfigWC whose String field carries the
-            // iconUrl that Pattern A omits.
+            // Pass 2: find the iconUrl that sits on the SAME object as the target appId
+            // (the config holds d=appId / f=iconUrl together). Anchored to the appId locked
+            // by Pass 1 / the partial send so a host component cannot mix appIds and icons.
             for (Object a : args) {
                 if (g_mini_launch_full) break;
                 if (a == null) continue;
-                String[] scanned = scanByValuePattern(a);
-                if (scanned != null) sendMiniLaunch(scanned[0], scanned[1], scanned[2], scanned[3], scanned[4]);
+                String[] hit = findMiniIcon(a, g_mini_appId.isEmpty() ? null : g_mini_appId);
+                if (hit != null) sendMiniLaunch(hit[0], "", hit[1], "", "");
             }
         } catch (Exception e) {
             Log.w(TAG, "hookAppBrandRuntimeM0 failed: " + e);
@@ -2445,6 +2448,13 @@ public class HookerBridge {
                     String[] info = scanFieldsForMiniLaunch(container);
                     if (info != null) {
                         sendMiniLaunch(info[0], info[1], info[2], info[3], info[4]);
+                    }
+                    // Cohesive icon search anchored to the locked target appId — this is the
+                    // path that fires for the target program, so it finds the program's own
+                    // d=appId / f=iconUrl pair rather than a host component's.
+                    if (!g_mini_launch_full) {
+                        String[] hit = findMiniIcon(container, g_mini_appId.isEmpty() ? null : g_mini_appId);
+                        if (hit != null) sendMiniLaunch(hit[0], "", hit[1], "", "");
                     }
                 }
             } catch (Exception e) {
@@ -2672,6 +2682,11 @@ public class HookerBridge {
     //   - If already sent partial and this is also partial → skip (avoid spam).
     private void sendMiniLaunch(String appId, String brand, String icon,
                                 String username, String ver) {
+        // Lock onto the first mini-program's appId; reject any send for a different
+        // appId (a host/sibling component) so we never overwrite the target's slot or
+        // pair one program's appId with another's icon.
+        if (g_mini_appId.isEmpty() && !appId.isEmpty()) g_mini_appId = appId;
+        else if (!appId.isEmpty() && !g_mini_appId.isEmpty() && !appId.equals(g_mini_appId)) return;
         boolean hasFull = !icon.isEmpty();
         // Remember the brand from whichever path supplies it; backfill it onto an
         // icon-bearing send that arrived with an empty brand (value-scan path).
@@ -2752,64 +2767,76 @@ public class HookerBridge {
     //
     // Returns String[]{appId, brandName, iconUrl, username, ""} when appId found,
     // null otherwise.
-    private static String[] scanByValuePattern(Object obj) {
-        if (obj == null) return null;
-        // acc = {appId, icon, username}. A depth-limited recursive walk so the iconUrl —
-        // a String field of a NESTED AppBrandInitConfigWC — is found even when obj is the
-        // AppBrandRuntime (whose toString, Pattern A, omits the icon).
-        String[] acc = new String[]{"", "", ""};
-        scanValuesDeep(obj, acc, 0, new java.util.IdentityHashMap<Object, Boolean>(), new int[]{0});
-        if (acc[0].startsWith("wx")) {
-            Log.i(TAG, "scanByValuePattern: appId=" + acc[0] + " icon=" + acc[1] + " user=" + acc[2]);
-            return new String[]{acc[0], "", acc[1], acc[2], ""};
-        }
-        return null;
+    // Find {appId, iconUrl} that live on the SAME object. The mini-program config holds
+    // d=appId and f=iconUrl together, so reading them off one object keeps them consistent
+    // and never pairs a host component's appId with another program's icon. When
+    // wantAppId != null, only an object whose appId equals it qualifies (anchors the icon
+    // to the locked target mini-program).
+    private static String[] findMiniIcon(Object obj, String wantAppId) {
+        String[] hit = findMiniIconDeep(obj, wantAppId, 0,
+                new java.util.IdentityHashMap<Object, Boolean>(), new int[]{0});
+        if (hit != null) Log.i(TAG, "findMiniIcon: appId=" + hit[0] + " icon=" + hit[1]
+                + " want=" + wantAppId);
+        return hit;
     }
 
-    // Mini-program icons live on wx.qlogo.cn (avatars) OR mmbiz.qpic.cn / mmocbiz.qpic.cn
-    // (developer-set logos). Match by host substring, not a single fixed prefix — the old
-    // wx.qlogo.cn-only filter dropped the common mmbiz.qpic.cn logos.
+    // Mini-program icons live on wx.qlogo.cn (mmhead) OR mmbiz.qpic.cn (developer logo).
+    // Match by host substring, not a single fixed prefix.
     private static boolean isWxImageUrl(String s) {
         return s.startsWith("http") && (s.contains("qlogo.cn") || s.contains("qpic.cn"));
     }
 
-    // Depth-limited (≤3), cycle-guarded, field-count-bounded recursive walk. Fills acc with
-    // the first appId / iconUrl / userName matched by value pattern, recursing into nested
-    // non-framework object fields so the config object inside the runtime is reached.
-    private static void scanValuesDeep(Object obj, String[] acc, int depth,
-                                       java.util.IdentityHashMap<Object, Boolean> seen, int[] budget) {
-        if (obj == null || depth > 3 || budget[0] > 4000) return;
-        if (seen.put(obj, Boolean.TRUE) != null) return;
+    // Depth-limited (≤4), cycle-guarded, field-budget-bounded recursive walk. Returns the
+    // first object that carries BOTH a wx appId and a wx image URL among its OWN String
+    // fields (so the pair is cohesive), recursing into nested non-framework objects.
+    private static String[] findMiniIconDeep(Object obj, String wantAppId, int depth,
+            java.util.IdentityHashMap<Object, Boolean> seen, int[] budget) {
+        if (obj == null || depth > 4 || budget[0] > 6000) return null;
+        if (seen.put(obj, Boolean.TRUE) != null) return null;
+        // 1) cohesive check: does THIS object hold both appId and icon as String fields?
+        String appId = null, icon = null;
         Class<?> cls = obj.getClass();
         while (cls != null && !cls.equals(Object.class)) {
             for (java.lang.reflect.Field f : cls.getDeclaredFields()) {
-                if (++budget[0] > 4000) return;
+                if (++budget[0] > 6000) break;
                 try {
                     f.setAccessible(true);
                     Object v = f.get(obj);
-                    if (v == null) continue;
-                    if (v instanceof String) {
-                        String s = (String) v;
-                        if (s.isEmpty()) continue;
-                        if (acc[0].isEmpty() && s.startsWith("wx") && s.length() > 10
-                                && !s.contains(" ") && !s.contains("/")) {
-                            acc[0] = s;
-                        } else if (acc[1].isEmpty() && isWxImageUrl(s)) {
-                            acc[1] = s;
-                        } else if (acc[2].isEmpty() && s.startsWith("gh_")) {
-                            acc[2] = s;
-                        }
-                    } else if (!(v instanceof Number) && !(v instanceof Boolean)
-                            && !v.getClass().isArray()
-                            && !v.getClass().getName().startsWith("java.")
-                            && !v.getClass().getName().startsWith("android.")) {
-                        scanValuesDeep(v, acc, depth + 1, seen, budget);
+                    if (!(v instanceof String)) continue;
+                    String s = (String) v;
+                    if (appId == null && s.length() > 10 && s.startsWith("wx")
+                            && !s.contains(" ") && !s.contains("/")) {
+                        appId = s;
+                    } else if (icon == null && isWxImageUrl(s)) {
+                        icon = s;
                     }
                 } catch (Exception ignored) {}
-                if (!acc[0].isEmpty() && !acc[1].isEmpty() && !acc[2].isEmpty()) return;
             }
             cls = cls.getSuperclass();
         }
+        if (appId != null && icon != null
+                && (wantAppId == null || wantAppId.equals(appId))) {
+            return new String[]{appId, icon};
+        }
+        // 2) recurse into nested non-framework object fields
+        cls = obj.getClass();
+        while (cls != null && !cls.equals(Object.class)) {
+            for (java.lang.reflect.Field f : cls.getDeclaredFields()) {
+                try {
+                    f.setAccessible(true);
+                    Object v = f.get(obj);
+                    if (v != null && !(v instanceof String) && !(v instanceof Number)
+                            && !(v instanceof Boolean) && !v.getClass().isArray()
+                            && !v.getClass().getName().startsWith("java.")
+                            && !v.getClass().getName().startsWith("android.")) {
+                        String[] r = findMiniIconDeep(v, wantAppId, depth + 1, seen, budget);
+                        if (r != null) return r;
+                    }
+                } catch (Exception ignored) {}
+            }
+            cls = cls.getSuperclass();
+        }
+        return null;
     }
 
     // Search obj's class hierarchy (declared fields only per level) for a field
