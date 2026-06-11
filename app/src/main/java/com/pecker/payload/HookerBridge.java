@@ -2118,12 +2118,32 @@ public class HookerBridge {
         // first is non-primitive (AppBrandInitConfig subclass).
         try {
             Class<?> runtimeCls = Class.forName("com.tencent.mm.plugin.appbrand.AppBrandRuntime", true, appCL);
+            // Prefer the method that takes an AppBrandInitConfig parameter — that object
+            // carries appId/brandName/iconUrl/userName (same entry detect-assistant hooks as
+            // AppBrandRuntime.m0(AppBrandInitConfig)). The legacy i(2) heuristic gets the
+            // runtime, whose toString has NO iconUrl, so it can only do a partial send.
+            Class<?> initCfgCls = null;
+            try {
+                initCfgCls = Class.forName("com.tencent.mm.plugin.appbrand.config.AppBrandInitConfig", true, appCL);
+            } catch (Exception ignored) {}
             java.lang.reflect.Method target = null;
-            for (java.lang.reflect.Method m : runtimeCls.getDeclaredMethods()) {
-                if ("i".equals(m.getName()) && m.getParameterTypes().length == 2
-                        && !m.getParameterTypes()[0].isPrimitive()) {
-                    target = m;
-                    break;
+            if (initCfgCls != null) {
+                for (java.lang.reflect.Method m : runtimeCls.getDeclaredMethods()) {
+                    Class<?>[] pts = m.getParameterTypes();
+                    if (pts.length == 1
+                            && (pts[0].isAssignableFrom(initCfgCls) || initCfgCls.isAssignableFrom(pts[0]))) {
+                        target = m;
+                        break;
+                    }
+                }
+            }
+            if (target == null) {
+                for (java.lang.reflect.Method m : runtimeCls.getDeclaredMethods()) {
+                    if ("i".equals(m.getName()) && m.getParameterTypes().length == 2
+                            && !m.getParameterTypes()[0].isPrimitive()) {
+                        target = m;
+                        break;
+                    }
                 }
             }
             if (target != null) {
@@ -2134,7 +2154,8 @@ public class HookerBridge {
                 if (backup instanceof java.lang.reflect.Method) {
                     inst.backupAppBrandRuntimeM0 = (java.lang.reflect.Method) backup;
                     installed++;
-                    Log.i(TAG, "mini_hooks: AppBrandRuntime.i hooked → mini_launch");
+                    Log.i(TAG, "mini_hooks: AppBrandRuntime." + target.getName()
+                            + "(" + target.getParameterTypes().length + ") hooked → mini_launch");
                 } else {
                     Log.w(TAG, "mini_hooks: AppBrandRuntime.i hookNative returned null");
                 }
@@ -2298,28 +2319,52 @@ public class HookerBridge {
     // and still allows the main path (Pattern B, full data) to send an upgrade later.
     private volatile boolean g_mini_launch_sent = false;
     private volatile boolean g_mini_launch_full  = false;
+    // Brand carried over from a partial send so an icon-bearing full send (which may
+    // arrive with an empty brand from the value-scan path) keeps the mini-program name.
+    private volatile String  g_mini_brand        = "";
+    // One-shot field dump of the AppBrandRuntime/AppBrandInitConfig args for diagnosis.
+    private volatile boolean g_mini_launch_dumped = false;
 
     // Called by C++ LSPlant after it hooks AppBrandRuntime.m0.
     // args = {thiz, AppBrandInitConfig}
     public Method backupAppBrandRuntimeM0;
     public Object hookAppBrandRuntimeM0(Object[] args) {
-        if (backupAppBrandRuntimeM0 != null)
-            safeInvokeObject(backupAppBrandRuntimeM0, args[0], args[1], args[2]);
-        if (g_mini_launch_full || args[1] == null) return null;
-        try {
-            // Pass 1: toString() pattern matching (Pattern A / B) — fast, zero reflection.
-            String[] info = parseMiniLaunchInfo(args[1].toString());
-            if (info != null) {
-                sendMiniLaunch(info[0], info[1], info[2], info[3], info[4]);
+        // Arity-safe original call: the hooked method may take 1 param (AppBrandInitConfig)
+        // or the legacy 2 params, so invoke with whatever args were passed.
+        if (backupAppBrandRuntimeM0 != null) {
+            try {
+                Object[] reflArgs = java.util.Arrays.copyOfRange(args, 1, args.length);
+                backupAppBrandRuntimeM0.invoke(args[0], reflArgs);
+            } catch (Exception e) {
+                Log.e(TAG, "backup AppBrandRuntime invoke failed: " + e);
             }
-            // Pass 2: value-pattern field scan — works without knowing class name or field
-            // names. Fires on a WeChat thread so args[1].getClass() has the correct CL.
-            // Runs only when we still need iconUrl (g_mini_launch_full still false).
-            if (!g_mini_launch_full) {
-                String[] scanned = scanByValuePattern(args[1]);
-                if (scanned != null) {
-                    sendMiniLaunch(scanned[0], scanned[1], scanned[2], scanned[3], scanned[4]);
+        }
+        if (g_mini_launch_full) return null;
+        try {
+            // One-shot: dump the param objects so the appId/icon field layout is visible
+            // in logcat if extraction ever regresses on a new WeChat version.
+            if (!g_mini_launch_dumped) {
+                g_mini_launch_dumped = true;
+                for (int i = 1; i < args.length; i++) {
+                    dumpObjectFields("mini_launch_arg[" + i + "]", args[i]);
                 }
+            }
+            // Pass 1: toString() patterns over every arg. Pattern A (runtime) → appId+brand
+            // partial; Pattern B (config) → also iconUrl.
+            for (Object a : args) {
+                if (g_mini_launch_full) break;
+                if (a == null) continue;
+                String[] info = parseMiniLaunchInfo(a.toString());
+                if (info != null) sendMiniLaunch(info[0], info[1], info[2], info[3], info[4]);
+            }
+            // Pass 2: recursive value-scan over every arg — including args[0] (the runtime),
+            // which holds the nested AppBrandInitConfigWC whose String field carries the
+            // iconUrl that Pattern A omits.
+            for (Object a : args) {
+                if (g_mini_launch_full) break;
+                if (a == null) continue;
+                String[] scanned = scanByValuePattern(a);
+                if (scanned != null) sendMiniLaunch(scanned[0], scanned[1], scanned[2], scanned[3], scanned[4]);
             }
         } catch (Exception e) {
             Log.w(TAG, "hookAppBrandRuntimeM0 failed: " + e);
@@ -2628,6 +2673,10 @@ public class HookerBridge {
     private void sendMiniLaunch(String appId, String brand, String icon,
                                 String username, String ver) {
         boolean hasFull = !icon.isEmpty();
+        // Remember the brand from whichever path supplies it; backfill it onto an
+        // icon-bearing send that arrived with an empty brand (value-scan path).
+        if (!brand.isEmpty()) g_mini_brand = brand;
+        else if (!g_mini_brand.isEmpty()) brand = g_mini_brand;
         if (g_mini_launch_full) return;           // already sent complete data
         if (g_mini_launch_sent && !hasFull) return; // already sent partial, this is also partial
         g_mini_launch_sent = true;
@@ -2705,34 +2754,62 @@ public class HookerBridge {
     // null otherwise.
     private static String[] scanByValuePattern(Object obj) {
         if (obj == null) return null;
-        String appId = "", brand = "", icon = "", username = "";
+        // acc = {appId, icon, username}. A depth-limited recursive walk so the iconUrl —
+        // a String field of a NESTED AppBrandInitConfigWC — is found even when obj is the
+        // AppBrandRuntime (whose toString, Pattern A, omits the icon).
+        String[] acc = new String[]{"", "", ""};
+        scanValuesDeep(obj, acc, 0, new java.util.IdentityHashMap<Object, Boolean>(), new int[]{0});
+        if (acc[0].startsWith("wx")) {
+            Log.i(TAG, "scanByValuePattern: appId=" + acc[0] + " icon=" + acc[1] + " user=" + acc[2]);
+            return new String[]{acc[0], "", acc[1], acc[2], ""};
+        }
+        return null;
+    }
+
+    // Mini-program icons live on wx.qlogo.cn (avatars) OR mmbiz.qpic.cn / mmocbiz.qpic.cn
+    // (developer-set logos). Match by host substring, not a single fixed prefix — the old
+    // wx.qlogo.cn-only filter dropped the common mmbiz.qpic.cn logos.
+    private static boolean isWxImageUrl(String s) {
+        return s.startsWith("http") && (s.contains("qlogo.cn") || s.contains("qpic.cn"));
+    }
+
+    // Depth-limited (≤3), cycle-guarded, field-count-bounded recursive walk. Fills acc with
+    // the first appId / iconUrl / userName matched by value pattern, recursing into nested
+    // non-framework object fields so the config object inside the runtime is reached.
+    private static void scanValuesDeep(Object obj, String[] acc, int depth,
+                                       java.util.IdentityHashMap<Object, Boolean> seen, int[] budget) {
+        if (obj == null || depth > 3 || budget[0] > 4000) return;
+        if (seen.put(obj, Boolean.TRUE) != null) return;
         Class<?> cls = obj.getClass();
         while (cls != null && !cls.equals(Object.class)) {
             for (java.lang.reflect.Field f : cls.getDeclaredFields()) {
-                if (f.getType() != String.class) continue;
+                if (++budget[0] > 4000) return;
                 try {
                     f.setAccessible(true);
-                    String v = (String) f.get(obj);
-                    if (v == null || v.isEmpty()) continue;
-                    if (appId.isEmpty() && v.startsWith("wx") && v.length() > 10
-                            && !v.contains(" ") && !v.contains("/")) {
-                        appId = v;
-                    } else if (icon.isEmpty()
-                            && (v.startsWith("http://wx.qlogo.cn")
-                             || v.startsWith("https://wx.qlogo.cn"))) {
-                        icon = v;
-                    } else if (username.isEmpty() && v.startsWith("gh_")) {
-                        username = v;
+                    Object v = f.get(obj);
+                    if (v == null) continue;
+                    if (v instanceof String) {
+                        String s = (String) v;
+                        if (s.isEmpty()) continue;
+                        if (acc[0].isEmpty() && s.startsWith("wx") && s.length() > 10
+                                && !s.contains(" ") && !s.contains("/")) {
+                            acc[0] = s;
+                        } else if (acc[1].isEmpty() && isWxImageUrl(s)) {
+                            acc[1] = s;
+                        } else if (acc[2].isEmpty() && s.startsWith("gh_")) {
+                            acc[2] = s;
+                        }
+                    } else if (!(v instanceof Number) && !(v instanceof Boolean)
+                            && !v.getClass().isArray()
+                            && !v.getClass().getName().startsWith("java.")
+                            && !v.getClass().getName().startsWith("android.")) {
+                        scanValuesDeep(v, acc, depth + 1, seen, budget);
                     }
                 } catch (Exception ignored) {}
+                if (!acc[0].isEmpty() && !acc[1].isEmpty() && !acc[2].isEmpty()) return;
             }
             cls = cls.getSuperclass();
         }
-        if (appId.startsWith("wx")) {
-            Log.i(TAG, "scanByValuePattern: appId=" + appId + " icon=" + icon + " user=" + username);
-            return new String[]{appId, brand, icon, username, ""};
-        }
-        return null;
     }
 
     // Search obj's class hierarchy (declared fields only per level) for a field
