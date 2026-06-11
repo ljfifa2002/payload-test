@@ -2327,6 +2327,12 @@ public class HookerBridge {
     private volatile String  g_mini_appId        = "";
     // One-shot field dump of the AppBrandRuntime/AppBrandInitConfig args for diagnosis.
     private volatile boolean g_mini_launch_dumped = false;
+    // Base-library version (kernelVersion). It is NOT in the launch config — only in jsapi
+    // payloads — so it is captured later; icon/ver are cached to re-send the full row once.
+    private volatile String  g_mini_publiclib    = "";
+    private volatile String  g_mini_icon         = "";
+    private volatile String  g_mini_ver          = "";
+    private volatile boolean g_mini_lib_resent   = false;
 
     // Called by C++ LSPlant after it hooks AppBrandRuntime.m0.
     // args = {thiz, AppBrandInitConfig}
@@ -2464,6 +2470,21 @@ public class HookerBridge {
         try {
             String api  = args[1] != null ? args[1].toString() : "";
             String data = args[2] != null ? args[2].toString() : "";
+            // Capture the base-library version (kernelVersion) — jsapi-only. If the full
+            // mini_launch already went out without it, re-send the whole row once (backend
+            // REPLACE INTO replaces every column, so a partial update would wipe the rest).
+            if (g_mini_publiclib.isEmpty()) {
+                String lib = extractPublicLib(data);
+                if (!lib.isEmpty()) {
+                    g_mini_publiclib = lib;
+                    Log.i(TAG, "mini_publiclib: " + lib);
+                    if (g_mini_launch_full && !g_mini_lib_resent && !g_mini_appId.isEmpty()) {
+                        g_mini_lib_resent = true;
+                        emitMiniLaunch(g_mini_appId, g_mini_brand, g_mini_icon, g_mini_ver,
+                                "", g_mini_publiclib, "full+lib");
+                    }
+                }
+            }
             if (!MINI_API_BLACKLIST.contains(api)) {
                 String json = "{\"type\":\"mini_call_api\""
                     + ",\"api\":\""    + jsonEscape(api)  + "\""
@@ -2695,19 +2716,29 @@ public class HookerBridge {
         if (g_mini_launch_full) return;           // already sent complete data
         if (g_mini_launch_sent && !hasFull) return; // already sent partial, this is also partial
         g_mini_launch_sent = true;
-        if (hasFull) g_mini_launch_full = true;
+        if (hasFull) { g_mini_launch_full = true; g_mini_icon = icon; g_mini_ver = ver; }
+        emitMiniLaunch(appId, brand, icon, ver, username, g_mini_publiclib,
+                hasFull ? "full" : "partial");
+    }
+
+    // Build + send one mini_launch line. publicLibVersion (base library) is only present in
+    // jsapi payloads, not the launch config, so it may be empty here and filled in by a
+    // later re-send from hookJsapiQ0 (using the cached appId/brand/icon/ver).
+    private void emitMiniLaunch(String appId, String brand, String icon, String ver,
+                                String username, String publiclib, String tag) {
         String json = "{\"type\":\"mini_launch\""
-            + ",\"appId\":\""           + jsonEscape(appId)    + "\""
-            + ",\"brandName\":\""       + jsonEscape(brand)    + "\""
-            + ",\"appletBrandName\":\"" + jsonEscape(brand)    + "\""
-            + ",\"iconUrl\":\""         + jsonEscape(icon)     + "\""
-            + ",\"appletIconUrl\":\""   + jsonEscape(icon)     + "\""
-            + ",\"appVersion\":\""      + jsonEscape(ver)      + "\""
-            + ",\"appletVersion\":\""   + jsonEscape(ver)      + "\""
-            + ",\"username\":\""        + jsonEscape(username) + "\""
-            + ",\"timestamp\":"         + System.currentTimeMillis()
+            + ",\"appId\":\""            + jsonEscape(appId)     + "\""
+            + ",\"brandName\":\""        + jsonEscape(brand)     + "\""
+            + ",\"appletBrandName\":\""  + jsonEscape(brand)     + "\""
+            + ",\"iconUrl\":\""          + jsonEscape(icon)      + "\""
+            + ",\"appletIconUrl\":\""    + jsonEscape(icon)      + "\""
+            + ",\"appVersion\":\""       + jsonEscape(ver)       + "\""
+            + ",\"appletVersion\":\""    + jsonEscape(ver)       + "\""
+            + ",\"publicLibVersion\":\"" + jsonEscape(publiclib) + "\""
+            + ",\"username\":\""         + jsonEscape(username)  + "\""
+            + ",\"timestamp\":"          + System.currentTimeMillis()
             + "}";
-        Log.i(TAG, "mini_launch(" + (hasFull ? "full" : "partial") + "): " + json);
+        Log.i(TAG, "mini_launch(" + tag + "): " + json);
         SocketChannel.send(json);
     }
 
@@ -2932,6 +2963,24 @@ public class HookerBridge {
             cls = cls.getSuperclass();
         }
         return null;
+    }
+
+    // Base-library version (kernelVersion) extractor. The base library version is NOT in
+    // the launch config — only in jsapi payloads: operateRealtimeData's publicLibVersion,
+    // private_getBackgroundFetchData's lib_version, getbyauthinfo's libVersion,
+    // syncsecinfo's pub_version. Match the semver after any of those keys, tolerating JSON
+    // escaping (\" ). Confirmed base library: the value is identical across different
+    // mini-programs (3.15.3 for both 德邦/滴滴), i.e. WeChat's shared runtime library.
+    private static final java.util.regex.Pattern LIB_VER_PATTERN =
+        java.util.regex.Pattern.compile(
+            "(?:publicLibVersion|lib_version|libVersion|pub_version)[\\\\\":\\s]+(\\d+\\.\\d+\\.\\d+)");
+    private static String extractPublicLib(String data) {
+        if (data == null || data.isEmpty()) return "";
+        try {
+            java.util.regex.Matcher m = LIB_VER_PATTERN.matcher(data);
+            if (m.find()) return m.group(1);
+        } catch (Exception ignored) {}
+        return "";
     }
 
     // Search obj's class hierarchy (declared fields only per level) for a field
