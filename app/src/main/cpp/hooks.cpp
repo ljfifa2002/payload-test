@@ -343,6 +343,34 @@ void install_device_id_hooks(JNIEnv* env) {
         "android/telephony/TelephonyManager", "getLine1Number", "()Ljava/lang/String;",
         "hookGetLine1Number", kCbSig, "backupGetLine1Number", false);
 
+    // ── B: 设备标识补充 ──（no-arg overloads only, mirroring getDeviceId; all optional）
+    hook_one(env, hooker_obj, hooker_class,
+        "android/telephony/TelephonyManager", "getImei", "()Ljava/lang/String;",
+        "hookGetImei", kCbSig, "backupGetImei", false, false, true);
+    hook_one(env, hooker_obj, hooker_class,
+        "android/telephony/TelephonyManager", "getMeid", "()Ljava/lang/String;",
+        "hookGetMeid", kCbSig, "backupGetMeid", false, false, true);
+    hook_one(env, hooker_obj, hooker_class,
+        "android/os/Build", "getSerial", "()Ljava/lang/String;",
+        "hookBuildGetSerial", kCbSig, "backupBuildGetSerial", true, false, true);   // static
+    hook_one(env, hooker_obj, hooker_class,
+        "android/media/MediaDrm", "getPropertyByteArray", "(Ljava/lang/String;)[B",
+        "hookMediaDrmGetPropertyByteArray", kCbSig, "backupMediaDrmGetPropertyByteArray", false, false, true);
+    hook_one(env, hooker_obj, hooker_class,
+        "android/os/SystemProperties", "get", "(Ljava/lang/String;)Ljava/lang/String;",
+        "hookSystemPropertiesGet", kCbSig, "backupSystemPropertiesGet", true, false, true);   // static, hidden
+    hook_one(env, hooker_obj, hooker_class,
+        "android/bluetooth/BluetoothAdapter", "getAddress", "()Ljava/lang/String;",
+        "hookBluetoothGetAddress", kCbSig, "backupBluetoothGetAddress", false, false, true);
+    hook_one(env, hooker_obj, hooker_class,
+        "android/bluetooth/BluetoothAdapter", "getName", "()Ljava/lang/String;",
+        "hookBluetoothGetName", kCbSig, "backupBluetoothGetName", false, false, true);
+    // OAID (MSA) — app-bundled, static; modern InitSdk(Context,boolean,IIdentifierListener)
+    hook_one(env, hooker_obj, hooker_class,
+        "com/bun/miitmdid/core/MdidSdkHelper", "InitSdk",
+        "(Landroid/content/Context;ZLcom/bun/miitmdid/interfaces/IIdentifierListener;)I",
+        "hookOaidInitSdk", kCbSig, "backupOaidInitSdk", true, true, true);   // static, use_app_cl
+
     // Settings.Secure.getString — hooked on all devices. The old ColorOS skip
     // (LSPlant trampoline crash from iFlytek/Tratao JNI contexts) was an artifact
     // of the inline-hook era; under a clean single LSPlant hook it no longer
@@ -646,6 +674,73 @@ void install_device_id_hooks(JNIEnv* env) {
         "(I)Ljava/util/List;",
         "hookGetInstalledApplications", kCbSig, "backupGetInstalledApplications", false, true);
 
+    // ── B: 应用列表补充（ApplicationPackageManager，use_app_cl，optional）──
+    hook_one(env, hooker_obj, hooker_class,
+        "android/app/ApplicationPackageManager", "getPackageInfo",
+        "(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;",
+        "hookGetPackageInfo", kCbSig, "backupGetPackageInfo", false, true, true);
+    hook_one(env, hooker_obj, hooker_class,
+        "android/app/ApplicationPackageManager", "getApplicationInfo",
+        "(Ljava/lang/String;I)Landroid/content/pm/ApplicationInfo;",
+        "hookGetApplicationInfo", kCbSig, "backupGetApplicationInfo", false, true, true);
+    hook_one(env, hooker_obj, hooker_class,
+        "android/app/ApplicationPackageManager", "queryIntentActivities",
+        "(Landroid/content/Intent;I)Ljava/util/List;",
+        "hookQueryIntentActivities", kCbSig, "backupQueryIntentActivities", false, true, true);
+    hook_one(env, hooker_obj, hooker_class,
+        "android/app/ApplicationPackageManager", "resolveActivity",
+        "(Landroid/content/Intent;I)Landroid/content/pm/ResolveInfo;",
+        "hookResolveActivity", kCbSig, "backupResolveActivity", false, true, true);
+    hook_one(env, hooker_obj, hooker_class,
+        "android/app/ApplicationPackageManager", "getLaunchIntentForPackage",
+        "(Ljava/lang/String;)Landroid/content/Intent;",
+        "hookGetLaunchIntentForPackage", kCbSig, "backupGetLaunchIntentForPackage", false, true, true);
+    // API 33 overload — same behavior, reuses key PackageManager.getInstalledPackages in handler
+    hook_one(env, hooker_obj, hooker_class,
+        "android/app/ApplicationPackageManager", "getInstalledPackages",
+        "(Landroid/content/pm/PackageManager$PackageInfoFlags;)Ljava/util/List;",
+        "hookGetInstalledPackagesFlags", kCbSig, "backupGetInstalledPackagesFlags", false, true, true);
+    hook_one(env, hooker_obj, hooker_class,
+        "android/app/usage/UsageStatsManager", "queryUsageStats",
+        "(IJJ)Ljava/util/List;",
+        "hookQueryUsageStats", kCbSig, "backupQueryUsageStats", false, false, true);
+
+    // ── B: 位置补充 ──
+    hook_one(env, hooker_obj, hooker_class,
+        "android/location/Geocoder", "getFromLocation",
+        "(DDI)Ljava/util/List;",
+        "hookGeocoderGetFromLocation", kCbSig, "backupGeocoderGetFromLocation", false, false, true);
+    hook_one(env, hooker_obj, hooker_class,
+        "android/location/LocationManager", "requestSingleUpdate",
+        "(Ljava/lang/String;Landroid/location/LocationListener;Landroid/os/Looper;)V",
+        "hookRequestSingleUpdate", kCbSig, "backupRequestSingleUpdate", false, false, true);
+    // GMS fused-location: hook the stable public factory (getLastLocation lives on an obfuscated
+    // impl that can't be reliably LSPlant-hooked). Detects fused-location usage. static, use_app_cl.
+    hook_one(env, hooker_obj, hooker_class,
+        "com/google/android/gms/location/LocationServices", "getFusedLocationProviderClient",
+        "(Landroid/content/Context;)Lcom/google/android/gms/location/FusedLocationProviderClient;",
+        "hookFusedLocationClient", kCbSig, "backupFusedLocationClient", true, true, true);
+
+    // ── B: WiFi 补充 ──
+    hook_one(env, hooker_obj, hooker_class,
+        "android/net/wifi/WifiManager", "getConnectionInfo",
+        "()Landroid/net/wifi/WifiInfo;",
+        "hookWifiGetConnectionInfo", kCbSig, "backupWifiGetConnectionInfo", false, false, true);
+    hook_one(env, hooker_obj, hooker_class,
+        "android/net/wifi/WifiManager", "getScanResults",
+        "()Ljava/util/List;",
+        "hookWifiGetScanResults", kCbSig, "backupWifiGetScanResults", false, false, true);
+
+    // ── B: 账户补充 ──
+    hook_one(env, hooker_obj, hooker_class,
+        "android/accounts/AccountManager", "getAccounts",
+        "()[Landroid/accounts/Account;",
+        "hookGetAccounts", kCbSig, "backupGetAccounts", false, false, true);
+    hook_one(env, hooker_obj, hooker_class,
+        "android/accounts/AccountManager", "getAccountsByType",
+        "(Ljava/lang/String;)[Landroid/accounts/Account;",
+        "hookGetAccountsByType", kCbSig, "backupGetAccountsByType", false, false, true);
+
     hook_one(env, hooker_obj, hooker_class,
         "android/app/ActivityManager", "getRunningTasks",
         "(I)Ljava/util/List;",
@@ -682,6 +777,30 @@ void install_device_id_hooks(JNIEnv* env) {
         "(Landroid/content/Context;Ljava/lang/String;)I",
         "hookContextCompatCheckSelfPermission", kCbSig,
         "backupContextCompatCheckSelfPermission", true, true);
+
+    // A.2: PackageManager.checkPermission(permName, pkgName) — concrete impl is
+    // android.app.ApplicationPackageManager (PackageManager is abstract). Probes whether a
+    // package holds a permission; reported unconditionally under "PackageManager.checkPermission".
+    hook_one(env, hooker_obj, hooker_class,
+        "android/app/ApplicationPackageManager", "checkPermission",
+        "(Ljava/lang/String;Ljava/lang/String;)I",
+        "hookPackageManagerCheckPermission", kCbSig,
+        "backupPackageManagerCheckPermission", false, true, true);
+
+    // A.3: Health Connect readRecords — app-bundled AndroidX lib (use_app_cl), Android 14+.
+    // readRecords is a suspend fn → signature carries kotlin.coroutines.Continuation and returns
+    // Object. The concrete impl class differs by androidx version; register both as optional so
+    // whichever the app bundles gets hooked (an app bundles at most one).
+    hook_one(env, hooker_obj, hooker_class,
+        "androidx/health/connect/client/impl/HealthConnectClientImpl", "readRecords",
+        "(Landroidx/health/connect/client/request/ReadRecordsRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;",
+        "hookHealthConnectReadRecords", kCbSig,
+        "backupHealthConnectReadRecords", false, true, true);
+    hook_one(env, hooker_obj, hooker_class,
+        "androidx/health/connect/client/impl/HealthConnectClientUpsideDownImpl", "readRecords",
+        "(Landroidx/health/connect/client/request/ReadRecordsRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;",
+        "hookHealthConnectReadRecords", kCbSig,
+        "backupHealthConnectReadRecords", false, true, true);
 
     // getSystemService filtered on "media_projection" only
     hook_one(env, hooker_obj, hooker_class,

@@ -128,6 +128,30 @@ public class HookerBridge {
     public Method backupGetSubscriberId;
     public Method backupGetSimSerialNumber;
     public Method backupGetLine1Number;
+    // B: 设备标识补充
+    public Method backupGetImei;
+    public Method backupGetMeid;
+    public Method backupBuildGetSerial;
+    public Method backupMediaDrmGetPropertyByteArray;
+    public Method backupSystemPropertiesGet;
+    public Method backupBluetoothGetAddress;
+    public Method backupBluetoothGetName;
+    public Method backupOaidInitSdk;
+    // B: 应用列表 / 位置 / WiFi / 账户 补充
+    public Method backupGetPackageInfo;
+    public Method backupGetApplicationInfo;
+    public Method backupQueryIntentActivities;
+    public Method backupResolveActivity;
+    public Method backupGetLaunchIntentForPackage;
+    public Method backupGetInstalledPackagesFlags;
+    public Method backupQueryUsageStats;
+    public Method backupGeocoderGetFromLocation;
+    public Method backupRequestSingleUpdate;
+    public Method backupFusedLocationClient;
+    public Method backupWifiGetConnectionInfo;
+    public Method backupWifiGetScanResults;
+    public Method backupGetAccounts;
+    public Method backupGetAccountsByType;
     public Method backupSettingsSecureGetString;
     public Method backupWifiGetMacAddress;
     public Method backupNetworkInterfaceGetHardwareAddress;
@@ -197,6 +221,8 @@ public class HookerBridge {
     public Method backupSendOrderedBroadcast;
     public Method backupContextCheckPermission;
     public Method backupContextCompatCheckSelfPermission;
+    public Method backupPackageManagerCheckPermission;   // A.2: PackageManager.checkPermission(perm,pkg)
+    public Method backupHealthConnectReadRecords;         // A.3: HealthConnect readRecords (use_app_cl)
     public Method backupGetSystemService;
     // Phase 8: third-party location SDKs (optional)
     public Method backupBaiduLocationStart;
@@ -550,6 +576,206 @@ public class HookerBridge {
         Object thiz = args[0];
         String v = backupGetLine1Number != null ? safeInvoke(backupGetLine1Number, thiz) : null;
         log("getLine1Number", v != null ? v : "");
+        return v;
+    }
+
+    // ── B: 设备标识补充 ───────────────────────────────────────────────────────
+    // TelephonyManager.getImei()/getMeid() — no-arg only (slot overloads intentionally
+    // not hooked, mirroring getDeviceId). Distinct keys, shared flag family imei/meid.
+    public Object hookGetImei(Object[] args) {
+        Object thiz = args[0];
+        String v = backupGetImei != null ? safeInvoke(backupGetImei, thiz) : null;
+        log("TelephonyManager.getImei", v != null ? v : "");
+        return v;
+    }
+    public Object hookGetMeid(Object[] args) {
+        Object thiz = args[0];
+        String v = backupGetMeid != null ? safeInvoke(backupGetMeid, thiz) : null;
+        log("TelephonyManager.getMeid", v != null ? v : "");
+        return v;
+    }
+    // Build.getSerial() — static, API 26+, needs READ_PHONE_STATE.
+    public Object hookBuildGetSerial(Object[] args) {
+        String v = null;
+        if (backupBuildGetSerial != null) {
+            try { v = (String) backupBuildGetSerial.invoke(null); }
+            catch (Exception e) { Log.e(TAG, "backup Build.getSerial failed: " + e); }
+        }
+        log("Build.getSerial", v != null ? v : "");
+        return v;
+    }
+    // MediaDrm.getPropertyByteArray(String) — Widevine device fingerprint; only the
+    // "deviceUniqueId" property is the identifier, other properties are not reported.
+    public Object hookMediaDrmGetPropertyByteArray(Object[] args) {
+        String prop = args[1] != null ? args[1].toString() : "";
+        Object v = backupMediaDrmGetPropertyByteArray != null
+                ? safeInvokeObject(backupMediaDrmGetPropertyByteArray, args[0], args[1]) : null;
+        if ("deviceUniqueId".equals(prop)) log("MediaDrm.getDeviceId", prop);
+        return v;
+    }
+    // SystemProperties.get(String) — static, extremely high-frequency framework call;
+    // only report when the key is device-identifying (serial-number props) to avoid flooding.
+    public Object hookSystemPropertiesGet(Object[] args) {
+        String key = args[0] != null ? args[0].toString() : "";
+        String v = null;
+        if (backupSystemPropertiesGet != null) {
+            try { v = (String) backupSystemPropertiesGet.invoke(null, args[0]); }
+            catch (Exception e) { Log.e(TAG, "backup SystemProperties.get failed: " + e); }
+        }
+        if (key.toLowerCase().contains("serial")) log("SystemProperties.get", key);
+        return v;
+    }
+    // BluetoothAdapter.getAddress()/getName() — instance.
+    public Object hookBluetoothGetAddress(Object[] args) {
+        Object thiz = args[0];
+        String v = backupBluetoothGetAddress != null ? safeInvoke(backupBluetoothGetAddress, thiz) : null;
+        log("BluetoothAdapter.getAddress", v != null ? v : "");
+        return v;
+    }
+    public Object hookBluetoothGetName(Object[] args) {
+        Object thiz = args[0];
+        String v = backupBluetoothGetName != null ? safeInvoke(backupBluetoothGetName, thiz) : null;
+        log("BluetoothAdapter.getName", v != null ? v : "");
+        return v;
+    }
+    // OAID (移动安全联盟 MSA) MdidSdkHelper.InitSdk(Context, boolean, IIdentifierListener) —
+    // static, app-bundled. OAID itself resolves async via the listener; we report the request
+    // (the behavior), not the value. Pass through with the original 3 args.
+    public Object hookOaidInitSdk(Object[] args) {
+        log("MdidSdkHelper.InitSdk", "");
+        if (backupOaidInitSdk != null) {
+            try { return backupOaidInitSdk.invoke(null, args[0], args[1], args[2]); }
+            catch (Exception e) { Log.e(TAG, "backup MdidSdkHelper.InitSdk failed: " + e); }
+        }
+        return 0;
+    }
+
+    // ── B: 应用列表 / 位置 / WiFi / 账户 补充 ────────────────────────────────
+    // Own package, resolved once via ActivityThread.currentPackageName(). Used to suppress
+    // self-queries on getPackageInfo/getApplicationInfo/getLaunchIntentForPackage so only
+    // cross-app probing (the privacy signal) is reported.
+    private static volatile String g_ownPackage = null;
+    private static String ownPackage() {
+        if (g_ownPackage == null) {
+            try {
+                Object n = Class.forName("android.app.ActivityThread")
+                        .getMethod("currentPackageName").invoke(null);
+                g_ownPackage = n != null ? (String) n : "";
+            } catch (Exception e) { g_ownPackage = ""; }
+        }
+        return g_ownPackage;
+    }
+    private static String intentDesc(Object intent) {
+        if (intent == null) return "";
+        try {
+            Object a = intent.getClass().getMethod("getAction").invoke(intent);
+            if (a != null) return (String) a;
+            Object d = intent.getClass().getMethod("getDataString").invoke(intent);
+            if (d != null) return (String) d;
+        } catch (Exception ignored) {}
+        return "";
+    }
+
+    // ApplicationPackageManager.getPackageInfo(String, int)  args={thiz, pkg, flags}
+    public Object hookGetPackageInfo(Object[] args) {
+        String pkg = args[1] != null ? args[1].toString() : "";
+        Object v = backupGetPackageInfo != null
+                ? safeInvokeObject(backupGetPackageInfo, args[0], args[1], args[2]) : null;
+        if (!pkg.isEmpty() && !pkg.equals(ownPackage())) log("PackageManager.getPackageInfo", pkg);
+        return v;
+    }
+    public Object hookGetApplicationInfo(Object[] args) {
+        String pkg = args[1] != null ? args[1].toString() : "";
+        Object v = backupGetApplicationInfo != null
+                ? safeInvokeObject(backupGetApplicationInfo, args[0], args[1], args[2]) : null;
+        if (!pkg.isEmpty() && !pkg.equals(ownPackage())) log("PackageManager.getApplicationInfo", pkg);
+        return v;
+    }
+    // queryIntentActivities(Intent, int) / resolveActivity(Intent, int) — app discovery by intent.
+    public Object hookQueryIntentActivities(Object[] args) {
+        Object v = backupQueryIntentActivities != null
+                ? safeInvokeObject(backupQueryIntentActivities, args[0], args[1], args[2]) : null;
+        log("PackageManager.queryIntentActivities", intentDesc(args[1]));
+        return v;
+    }
+    public Object hookResolveActivity(Object[] args) {
+        Object v = backupResolveActivity != null
+                ? safeInvokeObject(backupResolveActivity, args[0], args[1], args[2]) : null;
+        log("PackageManager.resolveActivity", intentDesc(args[1]));
+        return v;
+    }
+    public Object hookGetLaunchIntentForPackage(Object[] args) {
+        String pkg = args[1] != null ? args[1].toString() : "";
+        Object v = backupGetLaunchIntentForPackage != null
+                ? safeInvokeObject(backupGetLaunchIntentForPackage, args[0], args[1]) : null;
+        if (!pkg.isEmpty() && !pkg.equals(ownPackage())) log("PackageManager.getLaunchIntentForPackage", pkg);
+        return v;
+    }
+    // getInstalledPackages(PackageInfoFlags) — API 33 overload; SAME behavior → reuse old key.
+    public Object hookGetInstalledPackagesFlags(Object[] args) {
+        Object list = backupGetInstalledPackagesFlags != null
+                ? safeInvokeObject(backupGetInstalledPackagesFlags, args[0], args[1]) : null;
+        log("PackageManager.getInstalledPackages", list != null ? "count=" + getListSize(list) : "null");
+        return list;
+    }
+    // UsageStatsManager.queryUsageStats(int, long, long)  args={thiz, intervalType, begin, end}
+    public Object hookQueryUsageStats(Object[] args) {
+        Object v = backupQueryUsageStats != null
+                ? safeInvokeObject(backupQueryUsageStats, args[0], args[1], args[2], args[3]) : null;
+        log("UsageStatsManager.queryUsageStats", v != null ? "count=" + getListSize(v) : "null");
+        return v;
+    }
+    // Geocoder.getFromLocation(double, double, int)  args={thiz, lat, lng, maxResults}
+    public Object hookGeocoderGetFromLocation(Object[] args) {
+        Object v = backupGeocoderGetFromLocation != null
+                ? safeInvokeObject(backupGeocoderGetFromLocation, args[0], args[1], args[2], args[3]) : null;
+        log("Geocoder.getFromLocation", args[1] + "," + args[2]);
+        return v;
+    }
+    // LocationManager.requestSingleUpdate(String, LocationListener, Looper)
+    public Object hookRequestSingleUpdate(Object[] args) {
+        String provider = args[1] != null ? args[1].toString() : "";
+        log("LocationManager.requestSingleUpdate", provider);
+        if (backupRequestSingleUpdate != null)
+            return safeInvokeObject(backupRequestSingleUpdate, args[0], args[1], args[2], args[3]);
+        return null;
+    }
+    // LocationServices.getFusedLocationProviderClient(Context) — static GMS factory. Reliable
+    // hook point (the actual getLastLocation() lives on an obfuscated impl). Reports fused-
+    // location usage when the app acquires the client.
+    public Object hookFusedLocationClient(Object[] args) {
+        log("FusedLocationProviderClient", "");
+        if (backupFusedLocationClient != null) {
+            try { return backupFusedLocationClient.invoke(null, args[0]); }
+            catch (Exception e) { Log.e(TAG, "backup getFusedLocationProviderClient failed: " + e); }
+        }
+        return null;
+    }
+    // WifiManager.getConnectionInfo() / getScanResults()  instance
+    public Object hookWifiGetConnectionInfo(Object[] args) {
+        Object v = backupWifiGetConnectionInfo != null
+                ? safeInvokeObject(backupWifiGetConnectionInfo, args[0]) : null;
+        log("WifiManager.getConnectionInfo", "");
+        return v;
+    }
+    public Object hookWifiGetScanResults(Object[] args) {
+        Object v = backupWifiGetScanResults != null
+                ? safeInvokeObject(backupWifiGetScanResults, args[0]) : null;
+        log("WifiManager.getScanResults", v != null ? "count=" + getListSize(v) : "null");
+        return v;
+    }
+    // AccountManager.getAccounts() / getAccountsByType(String)  instance
+    public Object hookGetAccounts(Object[] args) {
+        Object v = backupGetAccounts != null
+                ? safeInvokeObject(backupGetAccounts, args[0]) : null;
+        log("AccountManager.getAccounts", "");
+        return v;
+    }
+    public Object hookGetAccountsByType(Object[] args) {
+        String type = args[1] != null ? args[1].toString() : "";
+        Object v = backupGetAccountsByType != null
+                ? safeInvokeObject(backupGetAccountsByType, args[0], args[1]) : null;
+        log("AccountManager.getAccountsByType", type);
         return v;
     }
 
@@ -1941,6 +2167,31 @@ public class HookerBridge {
         }
         log("ContextCompat.checkSelfPermission", perm);
         return result != null ? result : -1;
+    }
+
+    // A.2: ApplicationPackageManager.checkPermission(String permName, String pkgName) → int
+    // instance: args={thiz, permName, pkgName}. Unconditional report (probing whether a package
+    // holds a permission is the signal itself; intentionally NOT aligned to DENIED-only like
+    // Context.checkPermission). Distinct config key "PackageManager.checkPermission".
+    public Object hookPackageManagerCheckPermission(Object[] args) {
+        String perm = args[1] != null ? args[1].toString() : "";
+        log("PackageManager.checkPermission", perm);
+        if (backupPackageManagerCheckPermission != null) {
+            try { return backupPackageManagerCheckPermission.invoke(args[0], args[1], args[2]); }
+            catch (Exception e) { Log.e(TAG, "backup PackageManager.checkPermission failed: " + e); }
+        }
+        return -1;
+    }
+
+    // A.3: HealthConnectClient(Impl/UpsideDownImpl).readRecords(ReadRecordsRequest, Continuation)
+    // instance: args={thiz, request, continuation}. readRecords is a Kotlin suspend fn, so the
+    // result resolves asynchronously via the Continuation — we only need to detect the CALL, so
+    // report on entry and pass through. App-bundled AndroidX lib (use_app_cl); Android 14+.
+    public Object hookHealthConnectReadRecords(Object[] args) {
+        log("HealthConnect.readRecords", "");
+        if (backupHealthConnectReadRecords != null)
+            return safeInvokeObject(backupHealthConnectReadRecords, args[0], args[1], args[2]);
+        return null;
     }
 
     // ContextWrapper.getSystemService(String)  instance: args={thiz, name}
