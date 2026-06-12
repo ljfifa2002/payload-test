@@ -131,6 +131,10 @@ public class HookerBridge {
     // B: 设备标识补充
     public Method backupGetImei;
     public Method backupGetMeid;
+    // slot 重载 getXxx(int) —— 行为监测，独立 handler/backup，复用无参 key
+    public Method backupGetDeviceIdSlot;
+    public Method backupGetImeiSlot;
+    public Method backupGetMeidSlot;
     public Method backupBuildGetSerial;
     public Method backupMediaDrmGetPropertyByteArray;
     public Method backupSystemPropertiesGet;
@@ -144,14 +148,22 @@ public class HookerBridge {
     public Method backupResolveActivity;
     public Method backupGetLaunchIntentForPackage;
     public Method backupGetInstalledPackagesFlags;
+    public Method backupGetInstalledApplicationsFlags;
     public Method backupQueryUsageStats;
     public Method backupGeocoderGetFromLocation;
     public Method backupRequestSingleUpdate;
+    public Method backupGetCurrentLocation;
     public Method backupFusedLocationClient;
     public Method backupWifiGetConnectionInfo;
     public Method backupWifiGetScanResults;
     public Method backupGetAccounts;
     public Method backupGetAccountsByType;
+    public Method backupGetAuthTokenActivity;
+    public Method backupGetAuthTokenNotify;
+    // 关联启动 / 自启动 补充（读相册复用 backupContentResolverQuery）
+    public Method backupContextStartService;
+    public Method backupContextBindService;
+    public Method backupJobSchedulerSchedule;
     public Method backupSettingsSecureGetString;
     public Method backupWifiGetMacAddress;
     public Method backupNetworkInterfaceGetHardwareAddress;
@@ -215,6 +227,7 @@ public class HookerBridge {
     public Method backupGetInstalledPackages;
     public Method backupGetInstalledApplications;
     public Method backupGetRunningTasks;
+    public Method backupGetRunningServices;
     public Method backupWifiGetSSID;
     public Method backupWifiGetBSSID;
     public Method backupSendBroadcast;
@@ -580,8 +593,8 @@ public class HookerBridge {
     }
 
     // ── B: 设备标识补充 ───────────────────────────────────────────────────────
-    // TelephonyManager.getImei()/getMeid() — no-arg only (slot overloads intentionally
-    // not hooked, mirroring getDeviceId). Distinct keys, shared flag family imei/meid.
+    // TelephonyManager.getImei()/getMeid() no-arg. Slot overloads getXxx(int) are hooked
+    // separately below for behavior detection (see hookGetImeiSlot etc.).
     public Object hookGetImei(Object[] args) {
         Object thiz = args[0];
         String v = backupGetImei != null ? safeInvoke(backupGetImei, thiz) : null;
@@ -592,6 +605,25 @@ public class HookerBridge {
         Object thiz = args[0];
         String v = backupGetMeid != null ? safeInvoke(backupGetMeid, thiz) : null;
         log("TelephonyManager.getMeid", v != null ? v : "");
+        return v;
+    }
+    // Slot overloads getImei(int)/getMeid(int)/getDeviceId(int) — behavior detection only:
+    // an app that reads only a specific SIM slot (fingerprinting SDKs iterate slots) must still
+    // be recorded as "read IMEI/MEID/DeviceId" regardless of the returned value (API29+ throws/
+    // empties anyway). Own handler+backup per overload; reuses the no-arg config key.
+    public Object hookGetImeiSlot(Object[] args) {
+        Object v = backupGetImeiSlot != null ? safeInvokeObject(backupGetImeiSlot, args[0], args[1]) : null;
+        log("TelephonyManager.getImei", v instanceof String ? (String) v : "");
+        return v;
+    }
+    public Object hookGetMeidSlot(Object[] args) {
+        Object v = backupGetMeidSlot != null ? safeInvokeObject(backupGetMeidSlot, args[0], args[1]) : null;
+        log("TelephonyManager.getMeid", v instanceof String ? (String) v : "");
+        return v;
+    }
+    public Object hookGetDeviceIdSlot(Object[] args) {
+        Object v = backupGetDeviceIdSlot != null ? safeInvokeObject(backupGetDeviceIdSlot, args[0], args[1]) : null;
+        log("getDeviceId", v instanceof String ? (String) v : "");
         return v;
     }
     // Build.getSerial() — static, API 26+, needs READ_PHONE_STATE.
@@ -718,6 +750,14 @@ public class HookerBridge {
         log("PackageManager.getInstalledPackages", list != null ? "count=" + getListSize(list) : "null");
         return list;
     }
+    // getInstalledApplications(ApplicationInfoFlags) — API 33 overload; SAME behavior → reuse old key
+    // (parity with getInstalledPackages flags overload; the int overload doesn't catch this path).
+    public Object hookGetInstalledApplicationsFlags(Object[] args) {
+        Object list = backupGetInstalledApplicationsFlags != null
+                ? safeInvokeObject(backupGetInstalledApplicationsFlags, args[0], args[1]) : null;
+        log("PackageManager.getInstalledApplications", list != null ? "count=" + getListSize(list) : "null");
+        return list;
+    }
     // UsageStatsManager.queryUsageStats(int, long, long)  args={thiz, intervalType, begin, end}
     public Object hookQueryUsageStats(Object[] args) {
         Object v = backupQueryUsageStats != null
@@ -738,6 +778,17 @@ public class HookerBridge {
         log("LocationManager.requestSingleUpdate", provider);
         if (backupRequestSingleUpdate != null)
             return safeInvokeObject(backupRequestSingleUpdate, args[0], args[1], args[2], args[3]);
+        return null;
+    }
+    // LocationManager.getCurrentLocation(String, CancellationSignal, Executor, Consumer) — API 30
+    // single-shot location. Distinct API from requestSingleUpdate/getLastKnownLocation; an app that
+    // uses only this modern call would otherwise miss the "获取位置" signal. args={thiz, provider,
+    // cancellationSignal, executor, consumer}. (API31 LocationRequest overload not hooked.)
+    public Object hookGetCurrentLocation(Object[] args) {
+        String provider = args[1] != null ? args[1].toString() : "";
+        log("LocationManager.getCurrentLocation", provider);
+        if (backupGetCurrentLocation != null)
+            return safeInvokeObject(backupGetCurrentLocation, args[0], args[1], args[2], args[3], args[4]);
         return null;
     }
     // LocationServices.getFusedLocationProviderClient(Context) — static GMS factory. Reliable
@@ -777,6 +828,25 @@ public class HookerBridge {
                 ? safeInvokeObject(backupGetAccountsByType, args[0], args[1]) : null;
         log("AccountManager.getAccountsByType", type);
         return v;
+    }
+    // getAuthToken — fetches an account's auth token (far more sensitive than the account name).
+    // Two common 6-arg overloads (Activity / boolean notifyAuthFailure); both report the same key,
+    // own flag "authtoken". data = authTokenType (e.g. an OAuth scope / service id). The token value
+    // is delivered async to the callback and intentionally not captured. (Deprecated 5-arg not hooked.)
+    // args = {thiz, account, authTokenType, options, activity|notifyAuthFailure, callback, handler}
+    public Object hookGetAuthTokenActivity(Object[] args) {
+        String tokenType = args[2] != null ? args[2].toString() : "";
+        log("AccountManager.getAuthToken", tokenType);
+        return backupGetAuthTokenActivity != null
+                ? safeInvokeObject(backupGetAuthTokenActivity, args[0], args[1], args[2], args[3], args[4], args[5], args[6])
+                : null;
+    }
+    public Object hookGetAuthTokenNotify(Object[] args) {
+        String tokenType = args[2] != null ? args[2].toString() : "";
+        log("AccountManager.getAuthToken", tokenType);
+        return backupGetAuthTokenNotify != null
+                ? safeInvokeObject(backupGetAuthTokenNotify, args[0], args[1], args[2], args[3], args[4], args[5], args[6])
+                : null;
     }
 
     // Settings.Secure.getString(ContentResolver, String)  static: args={cr, name}
@@ -1151,6 +1221,7 @@ public class HookerBridge {
         else if (uriStr.contains("sms") || uriStr.contains("mms"))          key = "ContentResolver.query_sms";
         else if (uriStr.contains("call_log") || uriStr.contains("calls"))   key = "ContentResolver.query_call_log";
         else if (uriStr.contains("calendar"))                                key = "ContentResolver.query_calendar";
+        else if (uriStr.startsWith("content://media"))                       key = "ContentResolver.query_media";
         if (key != null) log(key, uriStr);
         return cursor;
     }
@@ -2088,6 +2159,14 @@ public class HookerBridge {
         log("ActivityManager.getRunningTasks", list != null ? "count=" + getListSize(list) : "null");
         return list;
     }
+    // ActivityManager.getRunningServices(int)  args={thiz, maxNum}. API26+ 只返回调用者自身服务。
+    public Object hookGetRunningServices(Object[] args) {
+        Object list = backupGetRunningServices != null
+                ? safeInvokeObject(backupGetRunningServices, args[0], args[1])
+                : null;
+        log("ActivityManager.getRunningServices", list != null ? "count=" + getListSize(list) : "null");
+        return list;
+    }
 
     // WifiInfo.getSSID()  instance: args={thiz}
     public Object hookWifiGetSSID(Object[] args) {
@@ -2134,6 +2213,46 @@ public class HookerBridge {
         if (backupSendOrderedBroadcast != null)
             safeInvokeObject(backupSendOrderedBroadcast, args[0], args[1], args[2]);
         return null;
+    }
+
+    // ContextWrapper.startService(Intent) → ComponentName  instance: args={thiz, intent}
+    // Report ONLY cross-app starts as 关联启动 (startupothers). In-process startService (own
+    // service, e.g. JobIntentService/foreground keep-alive) is high-frequency mundane traffic and
+    // is NOT the privacy-relevant "自启动" — that vector is covered by boot broadcast + JobScheduler.
+    public Object hookContextStartService(Object[] args) {
+        Object intent = args.length > 1 ? args[1] : null;
+        String targetPkg = getIntentPackage(intent);
+        String currentPkg = getCurrentPackage(args[0]);
+        if (targetPkg != null && !targetPkg.isEmpty() && !targetPkg.equals(currentPkg))
+            log("Context.startService", targetPkg);
+        return backupContextStartService != null
+                ? safeInvokeObject(backupContextStartService, args[0], args[1])
+                : null;
+    }
+
+    // ContextWrapper.bindService(Intent, ServiceConnection, int) → boolean
+    // instance: args={thiz, intent, conn, flags}. Same cross-app-only rule as startService;
+    // binding one's own service is ordinary plumbing, not a privacy behavior.
+    public Object hookContextBindService(Object[] args) {
+        Object intent = args.length > 1 ? args[1] : null;
+        String targetPkg = getIntentPackage(intent);
+        String currentPkg = getCurrentPackage(args[0]);
+        if (targetPkg != null && !targetPkg.isEmpty() && !targetPkg.equals(currentPkg))
+            log("Context.bindService", targetPkg);
+        Object r = backupContextBindService != null
+                ? safeInvokeObject(backupContextBindService, args[0], args[1], args[2], args[3])
+                : null;
+        return r != null ? r : Boolean.FALSE;
+    }
+
+    // JobSchedulerImpl.schedule(JobInfo) → int  instance: args={thiz, jobInfo}
+    // Scheduling a (often persisted) job is a self-wake / 自启动 vector; low-frequency, report all.
+    public Object hookJobSchedulerSchedule(Object[] args) {
+        log("JobScheduler.schedule", "");
+        Object r = backupJobSchedulerSchedule != null
+                ? safeInvokeObject(backupJobSchedulerSchedule, args[0], args[1])
+                : null;
+        return r != null ? r : Integer.valueOf(1); // RESULT_SUCCESS fallback
     }
 
     // ContextWrapper.checkPermission(String, int, int)  instance: args={thiz, permission, pid, uid}

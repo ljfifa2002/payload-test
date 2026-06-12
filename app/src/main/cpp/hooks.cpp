@@ -343,13 +343,24 @@ void install_device_id_hooks(JNIEnv* env) {
         "android/telephony/TelephonyManager", "getLine1Number", "()Ljava/lang/String;",
         "hookGetLine1Number", kCbSig, "backupGetLine1Number", false);
 
-    // ── B: 设备标识补充 ──（no-arg overloads only, mirroring getDeviceId; all optional）
+    // ── B: 设备标识补充 ──（no-arg here; slot (int) overloads added right below; all optional）
     hook_one(env, hooker_obj, hooker_class,
         "android/telephony/TelephonyManager", "getImei", "()Ljava/lang/String;",
         "hookGetImei", kCbSig, "backupGetImei", false, false, true);
     hook_one(env, hooker_obj, hooker_class,
         "android/telephony/TelephonyManager", "getMeid", "()Ljava/lang/String;",
         "hookGetMeid", kCbSig, "backupGetMeid", false, false, true);
+    // slot 重载 getImei(int)/getMeid(int)/getDeviceId(int) — 行为监测(不论取值)，
+    // 各自独立 handler/backup，复用无参 key；optional 兜底。
+    hook_one(env, hooker_obj, hooker_class,
+        "android/telephony/TelephonyManager", "getImei", "(I)Ljava/lang/String;",
+        "hookGetImeiSlot", kCbSig, "backupGetImeiSlot", false, false, true);
+    hook_one(env, hooker_obj, hooker_class,
+        "android/telephony/TelephonyManager", "getMeid", "(I)Ljava/lang/String;",
+        "hookGetMeidSlot", kCbSig, "backupGetMeidSlot", false, false, true);
+    hook_one(env, hooker_obj, hooker_class,
+        "android/telephony/TelephonyManager", "getDeviceId", "(I)Ljava/lang/String;",
+        "hookGetDeviceIdSlot", kCbSig, "backupGetDeviceIdSlot", false, false, true);
     hook_one(env, hooker_obj, hooker_class,
         "android/os/Build", "getSerial", "()Ljava/lang/String;",
         "hookBuildGetSerial", kCbSig, "backupBuildGetSerial", true, false, true);   // static
@@ -700,6 +711,11 @@ void install_device_id_hooks(JNIEnv* env) {
         "android/app/ApplicationPackageManager", "getInstalledPackages",
         "(Landroid/content/pm/PackageManager$PackageInfoFlags;)Ljava/util/List;",
         "hookGetInstalledPackagesFlags", kCbSig, "backupGetInstalledPackagesFlags", false, true, true);
+    // API 33 overload — reuses key PackageManager.getInstalledApplications (parity with packages flags)
+    hook_one(env, hooker_obj, hooker_class,
+        "android/app/ApplicationPackageManager", "getInstalledApplications",
+        "(Landroid/content/pm/PackageManager$ApplicationInfoFlags;)Ljava/util/List;",
+        "hookGetInstalledApplicationsFlags", kCbSig, "backupGetInstalledApplicationsFlags", false, true, true);
     hook_one(env, hooker_obj, hooker_class,
         "android/app/usage/UsageStatsManager", "queryUsageStats",
         "(IJJ)Ljava/util/List;",
@@ -714,6 +730,11 @@ void install_device_id_hooks(JNIEnv* env) {
         "android/location/LocationManager", "requestSingleUpdate",
         "(Ljava/lang/String;Landroid/location/LocationListener;Landroid/os/Looper;)V",
         "hookRequestSingleUpdate", kCbSig, "backupRequestSingleUpdate", false, false, true);
+    // getCurrentLocation(String, CancellationSignal, Executor, Consumer) — API 30 单次定位
+    hook_one(env, hooker_obj, hooker_class,
+        "android/location/LocationManager", "getCurrentLocation",
+        "(Ljava/lang/String;Landroid/os/CancellationSignal;Ljava/util/concurrent/Executor;Ljava/util/function/Consumer;)V",
+        "hookGetCurrentLocation", kCbSig, "backupGetCurrentLocation", false, false, true);
     // GMS fused-location: hook the stable public factory (getLastLocation lives on an obfuscated
     // impl that can't be reliably LSPlant-hooked). Detects fused-location usage. static, use_app_cl.
     hook_one(env, hooker_obj, hooker_class,
@@ -740,11 +761,25 @@ void install_device_id_hooks(JNIEnv* env) {
         "android/accounts/AccountManager", "getAccountsByType",
         "(Ljava/lang/String;)[Landroid/accounts/Account;",
         "hookGetAccountsByType", kCbSig, "backupGetAccountsByType", false, false, true);
+    // getAuthToken — 账户认证Token(比账号名敏感得多)；两个常用6参重载(Activity/boolean)，同一 key
+    hook_one(env, hooker_obj, hooker_class,
+        "android/accounts/AccountManager", "getAuthToken",
+        "(Landroid/accounts/Account;Ljava/lang/String;Landroid/os/Bundle;Landroid/app/Activity;Landroid/accounts/AccountManagerCallback;Landroid/os/Handler;)Landroid/accounts/AccountManagerFuture;",
+        "hookGetAuthTokenActivity", kCbSig, "backupGetAuthTokenActivity", false, false, true);
+    hook_one(env, hooker_obj, hooker_class,
+        "android/accounts/AccountManager", "getAuthToken",
+        "(Landroid/accounts/Account;Ljava/lang/String;Landroid/os/Bundle;ZLandroid/accounts/AccountManagerCallback;Landroid/os/Handler;)Landroid/accounts/AccountManagerFuture;",
+        "hookGetAuthTokenNotify", kCbSig, "backupGetAuthTokenNotify", false, false, true);
 
     hook_one(env, hooker_obj, hooker_class,
         "android/app/ActivityManager", "getRunningTasks",
         "(I)Ljava/util/List;",
         "hookGetRunningTasks", kCbSig, "backupGetRunningTasks", false);
+
+    hook_one(env, hooker_obj, hooker_class,
+        "android/app/ActivityManager", "getRunningServices",
+        "(I)Ljava/util/List;",
+        "hookGetRunningServices", kCbSig, "backupGetRunningServices", false);
 
     hook_one(env, hooker_obj, hooker_class,
         "android/net/wifi/WifiInfo", "getSSID",
@@ -765,6 +800,22 @@ void install_device_id_hooks(JNIEnv* env) {
         "android/content/ContextWrapper", "sendOrderedBroadcast",
         "(Landroid/content/Intent;Ljava/lang/String;)V",
         "hookSendOrderedBroadcast", kCbSig, "backupSendOrderedBroadcast", false);
+
+    // 关联启动：跨应用 startService / bindService（ContextWrapper，平台类）
+    hook_one(env, hooker_obj, hooker_class,
+        "android/content/ContextWrapper", "startService",
+        "(Landroid/content/Intent;)Landroid/content/ComponentName;",
+        "hookContextStartService", kCbSig, "backupContextStartService", false);
+    hook_one(env, hooker_obj, hooker_class,
+        "android/content/ContextWrapper", "bindService",
+        "(Landroid/content/Intent;Landroid/content/ServiceConnection;I)Z",
+        "hookContextBindService", kCbSig, "backupContextBindService", false);
+    // 自启动：JobScheduler.schedule —— 具体实现类 JobSchedulerImpl（抽象 JobScheduler 无法挂）；
+    // 跨版本类名可能不同，optional=true，未命中即 no-op。
+    hook_one(env, hooker_obj, hooker_class,
+        "android/app/JobSchedulerImpl", "schedule",
+        "(Landroid/app/job/JobInfo;)I",
+        "hookJobSchedulerSchedule", kCbSig, "backupJobSchedulerSchedule", false, false, true);
 
     hook_one(env, hooker_obj, hooker_class,
         "android/content/ContextWrapper", "checkPermission",
