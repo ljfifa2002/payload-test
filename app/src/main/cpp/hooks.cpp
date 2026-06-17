@@ -781,6 +781,31 @@ void install_device_id_hooks(JNIEnv* env) {
         "(I)Ljava/util/List;",
         "hookGetRunningServices", kCbSig, "backupGetRunningServices", false);
 
+    // ── 2026-06 补充：蓝牙扫描族(bluetoothmac) / 最近任务 / 已配置WiFi(ssid) / 多卡订阅(imsi) ──
+    hook_one(env, hooker_obj, hooker_class,
+        "android/app/ActivityManager", "getRecentTasks", "(II)Ljava/util/List;",
+        "hookGetRecentTasks", kCbSig, "backupGetRecentTasks", false, false, true);
+    hook_one(env, hooker_obj, hooker_class,
+        "android/bluetooth/BluetoothAdapter", "startDiscovery", "()Z",
+        "hookBluetoothStartDiscovery", kCbSig, "backupBluetoothStartDiscovery", false, false, true);
+    hook_one(env, hooker_obj, hooker_class,
+        "android/bluetooth/BluetoothAdapter", "getBondedDevices", "()Ljava/util/Set;",
+        "hookBluetoothGetBondedDevices", kCbSig, "backupBluetoothGetBondedDevices", false, false, true);
+    hook_one(env, hooker_obj, hooker_class,
+        "android/bluetooth/le/BluetoothLeScanner", "startScan",
+        "(Landroid/bluetooth/le/ScanCallback;)V",
+        "hookBleStartScan", kCbSig, "backupBleStartScan", false, false, true);
+    hook_one(env, hooker_obj, hooker_class,
+        "android/bluetooth/le/BluetoothLeScanner", "startScan",
+        "(Ljava/util/List;Landroid/bluetooth/le/ScanSettings;Landroid/bluetooth/le/ScanCallback;)V",
+        "hookBleStartScanFilters", kCbSig, "backupBleStartScanFilters", false, false, true);
+    hook_one(env, hooker_obj, hooker_class,
+        "android/net/wifi/WifiManager", "getConfiguredNetworks", "()Ljava/util/List;",
+        "hookWifiGetConfiguredNetworks", kCbSig, "backupWifiGetConfiguredNetworks", false, false, true);
+    hook_one(env, hooker_obj, hooker_class,
+        "android/telephony/SubscriptionManager", "getActiveSubscriptionInfoList", "()Ljava/util/List;",
+        "hookGetActiveSubscriptionInfoList", kCbSig, "backupGetActiveSubscriptionInfoList", false, false, true);
+
     hook_one(env, hooker_obj, hooker_class,
         "android/net/wifi/WifiInfo", "getSSID",
         "()Ljava/lang/String;",
@@ -858,6 +883,31 @@ void install_device_id_hooks(JNIEnv* env) {
         "android/content/ContextWrapper", "getSystemService",
         "(Ljava/lang/String;)Ljava/lang/Object;",
         "hookGetSystemService", kCbSig, "backupGetSystemService", false);
+
+    // 实际录屏：MediaProjection.createVirtualDisplay（8参公有重载，开始抓帧）。归 screen。
+    hook_one(env, hooker_obj, hooker_class,
+        "android/media/projection/MediaProjection", "createVirtualDisplay",
+        "(Ljava/lang/String;IIIILandroid/view/Surface;Landroid/hardware/display/VirtualDisplay$Callback;Landroid/os/Handler;)Landroid/hardware/display/VirtualDisplay;",
+        "hookCreateVirtualDisplay", kCbSig, "backupCreateVirtualDisplay", false, false, true);
+    // 申请录屏授权：MediaProjectionManager.createScreenCaptureIntent()。按"申请→permissions"归 permissions。
+    hook_one(env, hooker_obj, hooker_class,
+        "android/media/projection/MediaProjectionManager", "createScreenCaptureIntent",
+        "()Landroid/content/Intent;",
+        "hookCreateScreenCaptureIntent", kCbSig, "backupCreateScreenCaptureIntent", false, false, true);
+
+    // 无障碍·主动读屏：AccessibilityService.getRootInActiveWindow()（基类具体方法，子类继承→挂基类即全覆盖）。
+    // 归 accessibility；可被循环调用，agent 侧 dedupFlags(accessibility) 500ms 限频。
+    hook_one(env, hooker_obj, hooker_class,
+        "android/accessibilityservice/AccessibilityService", "getRootInActiveWindow",
+        "()Landroid/view/accessibility/AccessibilityNodeInfo;",
+        "hookGetRootInActiveWindow", kCbSig, "backupGetRootInActiveWindow", false, false, true);
+
+    // 无障碍·被动事件文本：AccessibilityEvent.getText()（具体方法，替代难挂的抽象 onAccessibilityEvent）。
+    // 取系统推送事件文本(他应用输入/界面变化、近似键盘记录)；高频→agent dedupFlags(accessibility) 500ms 限频。
+    hook_one(env, hooker_obj, hooker_class,
+        "android/view/accessibility/AccessibilityEvent", "getText",
+        "()Ljava/util/List;",
+        "hookAccessibilityEventGetText", kCbSig, "backupAccessibilityEventGetText", false, false, true);
 
     // Third-party location SDKs — optional
     hook_one(env, hooker_obj, hooker_class,

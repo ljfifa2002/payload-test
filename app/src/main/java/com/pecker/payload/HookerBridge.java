@@ -228,6 +228,18 @@ public class HookerBridge {
     public Method backupGetInstalledApplications;
     public Method backupGetRunningTasks;
     public Method backupGetRunningServices;
+    // 2026-06 补充：蓝牙扫描族(bluetoothmac)/最近任务(runningappprocesses)/已配置WiFi(ssid)/多卡订阅(imsi)
+    public Method backupGetRecentTasks;
+    public Method backupBluetoothStartDiscovery;
+    public Method backupBluetoothGetBondedDevices;
+    public Method backupBleStartScan;
+    public Method backupBleStartScanFilters;
+    public Method backupWifiGetConfiguredNetworks;
+    public Method backupGetActiveSubscriptionInfoList;
+    public Method backupCreateVirtualDisplay;
+    public Method backupCreateScreenCaptureIntent;
+    public Method backupGetRootInActiveWindow;
+    public Method backupAccessibilityEventGetText;
     public Method backupWifiGetSSID;
     public Method backupWifiGetBSSID;
     public Method backupSendBroadcast;
@@ -897,6 +909,7 @@ public class HookerBridge {
         String activityName = thiz != null ? thiz.getClass().getName() : "?";
         log("Activity.onCreate", activityName);
         scheduleScreenScan(thiz);
+        scheduleUiTextScan(thiz);
         if (backupActivityOnCreate != null) {
             try { backupActivityOnCreate.invoke(thiz, bundle); }
             catch (Exception e) { Log.e(TAG, "backup Activity.onCreate failed: " + e); }
@@ -925,6 +938,22 @@ public class HookerBridge {
     private static final String[] SIGN_BTN_WORDS  = {"登录","登陆","获取验证码","确认"};
     private static final String[] SIGN_USER_WORDS = {"账号","用户名","手机号","username"};
     private static final String[] SIGN_PASS_WORDS = {"密码","验证码","password"};
+
+    // ===================================================================
+    // UI-keyword (ui_text) collection switches — compile-time, flip before build.
+    //   UI_TEXT_ENABLED      : master switch for the whole ui_text feature
+    //                          (per-Activity view-tree scan → emit raw page text;
+    //                          the agent forwards to /external/data/uiText and the
+    //                          backend matches against dim_ui_keyword).
+    //   WEBVIEW_TEXT_ENABLED : also pull text from WebViews (system/X5/xweb) via
+    //                          reflective evaluateJavascript. Slightly higher risk,
+    //                          so it can be turned off independently while keeping
+    //                          native View-tree text.
+    // When false the whole path is dead-code (no scan, no @pecker traffic, no cost).
+    private static final boolean UI_TEXT_ENABLED      = true;
+    private static final boolean WEBVIEW_TEXT_ENABLED = true;
+    // Delay after Activity.onCreate before the ui_text scan, so the page has laid out.
+    private static final int UI_TEXT_SCAN_DELAY_MS = 1000;
 
     // Per-process dedup (= per APK task: each task force-stops + relaunches, so a
     // fresh process starts with an empty set). Mirrors detect-assistant commitWindow.
@@ -1098,6 +1127,166 @@ public class HookerBridge {
                 + "\",\"comments\":\"" + jsonEscape(comments)
                 + "\",\"delayMs\":0,\"timestamp\":" + System.currentTimeMillis() + "}";
         Log.i(TAG, json);
+        SocketChannel.send(json);
+    }
+
+    // ===================================================================
+    // ui_text collection: per-Activity scan of the visible view tree (+ WebView)
+    // → emit raw page text for SERVER-SIDE dim_ui_keyword matching. Independent of
+    // the privacy launch loop above; runs once per Activity.onCreate (every page),
+    // deduped by activity+content hash. Gated by UI_TEXT_ENABLED/WEBVIEW_TEXT_ENABLED.
+    // ===================================================================
+    private static void scheduleUiTextScan(final Object activity) {
+        if (!UI_TEXT_ENABLED) return;
+        if (!(activity instanceof android.app.Activity)) return;
+        if (isSubProcess()) return;
+        final String act = activity.getClass().getName();
+        try {
+            if (uiScanHandler == null) {
+                uiScanHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+            }
+            uiScanHandler.postDelayed(new Runnable() {
+                @Override public void run() {
+                    try { scanUiTextOnce(act); }
+                    catch (Throwable t) { Log.e(TAG, "ui_text scan failed: " + t); }
+                }
+            }, UI_TEXT_SCAN_DELAY_MS);
+        } catch (Throwable t) { Log.e(TAG, "scheduleUiTextScan failed: " + t); }
+    }
+
+    // Walk all window roots once: collect native text lines synchronously and emit
+    // them; kick off async WebView text extraction (each WebView emits separately).
+    private static void scanUiTextOnce(String activity) {
+        java.util.List<String> lines = new java.util.ArrayList<>();
+        java.util.List<android.view.View> webViews = new java.util.ArrayList<>();
+        for (android.view.View root : getWindowRoots()) collectUiText(root, lines, webViews);
+        emitUiText(activity, lines);
+        if (WEBVIEW_TEXT_ENABLED) {
+            for (android.view.View wv : webViews) extractWebViewText(activity, wv);
+        }
+    }
+
+    // Like walk() but collects RAW (un-stripped) text lines for ui_text, and gathers
+    // WebView views instead of descending into their internal render trees.
+    private static void collectUiText(android.view.View v, java.util.List<String> lines,
+                                      java.util.List<android.view.View> webViews) {
+        if (v == null) return;
+        if (WEBVIEW_TEXT_ENABLED && looksLikeWebView(v)) { webViews.add(v); return; }
+        CharSequence cs = null;
+        if (v instanceof android.widget.TextView) cs = ((android.widget.TextView) v).getText();
+        if (cs == null) cs = v.getContentDescription();
+        if (cs != null) {
+            String t = cs.toString().trim();
+            if (!t.isEmpty()) lines.add(t);
+        }
+        if (v instanceof android.view.ViewGroup) {
+            android.view.ViewGroup g = (android.view.ViewGroup) v;
+            int n = g.getChildCount();
+            for (int i = 0; i < n; i++) collectUiText(g.getChildAt(i), lines, webViews);
+        }
+    }
+
+    // Cheap class-name check up the superclass chain — covers android.webkit.WebView,
+    // com.tencent.smtt.sdk.WebView (X5/TBS), com.tencent.xweb.WebView (xweb), etc.
+    private static boolean looksLikeWebView(android.view.View v) {
+        try {
+            for (Class<?> c = v.getClass(); c != null && c != android.view.View.class; c = c.getSuperclass()) {
+                String n = c.getName();
+                if (n.endsWith(".WebView") || n.contains("WebView") || n.endsWith("XWalkView")) return true;
+            }
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+    // Reflective "duck-typed" evaluateJavascript: find evaluateJavascript(String,<Iface>)
+    // on the view's class, Proxy its callback interface (system / X5 / xweb each have
+    // their own ValueCallback), read document.body.innerText. Must run on the UI thread
+    // (caller does); result arrives async on the UI thread → emit a ui_text.
+    private static void extractWebViewText(final String activity, android.view.View webView) {
+        try {
+            java.lang.reflect.Method eval = null;
+            for (java.lang.reflect.Method m : webView.getClass().getMethods()) {
+                Class<?>[] p = m.getParameterTypes();
+                if (m.getName().equals("evaluateJavascript") && p.length == 2 && p[0] == String.class) { eval = m; break; }
+            }
+            if (eval == null) return;
+            final Class<?> cbIface = eval.getParameterTypes()[1];
+            if (!cbIface.isInterface()) return;
+            Object cb = java.lang.reflect.Proxy.newProxyInstance(
+                cbIface.getClassLoader(), new Class<?>[]{cbIface},
+                new java.lang.reflect.InvocationHandler() {
+                    @Override public Object invoke(Object proxy, java.lang.reflect.Method method, Object[] args) {
+                        String mn = method.getName();
+                        if ("onReceiveValue".equals(mn) && args != null && args.length == 1 && args[0] != null) {
+                            try {
+                                String inner = unquoteJsString(args[0].toString());
+                                if (!inner.isEmpty()) {
+                                    java.util.List<String> lines = new java.util.ArrayList<>();
+                                    for (String ln : inner.split("\\r?\\n")) {
+                                        String t = ln.trim();
+                                        if (!t.isEmpty()) lines.add(t);
+                                    }
+                                    emitUiText(activity, lines);
+                                }
+                            } catch (Throwable ignored) {}
+                            return null;
+                        }
+                        if ("toString".equals(mn)) return "PeckerEvalCb";
+                        if ("hashCode".equals(mn)) return System.identityHashCode(proxy);
+                        if ("equals".equals(mn)) return proxy == (args != null && args.length > 0 ? args[0] : null);
+                        return null;
+                    }
+                });
+            eval.invoke(webView, "document.body.innerText", cb);
+        } catch (Throwable t) { Log.e(TAG, "webview extract failed: " + t); }
+    }
+
+    // evaluateJavascript returns a JSON-encoded string (quoted; newline, quote and
+    // unicode escapes). Best-effort unescape — exactness isn't required for matching.
+    private static String unquoteJsString(String s) {
+        if (s == null) return "";
+        s = s.trim();
+        if (s.equals("null")) return "";
+        if (s.length() >= 2 && s.charAt(0) == '"' && s.charAt(s.length() - 1) == '"') {
+            s = s.substring(1, s.length() - 1);
+        }
+        StringBuilder out = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '\\' && i + 1 < s.length()) {
+                char d = s.charAt(++i);
+                switch (d) {
+                    case 'n':  out.append('\n'); break;
+                    case 'r':  out.append('\r'); break;
+                    case 't':  out.append('\t'); break;
+                    case '"':  out.append('"');  break;
+                    case '\\': out.append('\\'); break;
+                    case 'u':
+                        if (i + 4 < s.length()) {
+                            try { out.append((char) Integer.parseInt(s.substring(i + 1, i + 5), 16)); i += 4; }
+                            catch (Exception e) { out.append(d); }
+                        } else out.append(d);
+                        break;
+                    default: out.append(d);
+                }
+            } else {
+                out.append(c);
+            }
+        }
+        return out.toString();
+    }
+
+    private static void emitUiText(String activity, java.util.List<String> lines) {
+        if (lines == null || lines.isEmpty()) return;
+        StringBuilder sb = new StringBuilder();
+        for (String l : lines) { if (sb.length() > 0) sb.append('\n'); sb.append(l); }
+        String text = sb.toString();
+        if (text.trim().isEmpty()) return;
+        // Per-page + content dedup: same activity + same text emits once per process.
+        if (!committedWindows.add("uitext:" + activity + "#" + text.hashCode())) return;
+        String json = "{\"type\":\"ui_text\",\"activity\":\"" + jsonEscape(activity)
+                + "\",\"text\":\"" + jsonEscape(text)
+                + "\",\"timestamp\":" + System.currentTimeMillis() + "}";
         SocketChannel.send(json);
     }
 
@@ -1373,11 +1562,7 @@ public class HookerBridge {
 
     // Activity.startActivity(Intent)  instance: args={thiz, intent}
     public Object hookStartActivity(Object[] args) {
-        String targetPkg = getIntentPackage(args[1]);
-        String currentPkg = getCurrentPackage(args[0]);
-        String key = (targetPkg != null && !targetPkg.isEmpty() && !targetPkg.equals(currentPkg))
-                ? "Activity.startActivity_other" : "Activity.startActivity_self";
-        log(key, targetPkg != null ? targetPkg : "");
+        reportStartActivity(args[0], args[1]);
         logIntentDebug("Activity.startActivity(I)", args[0], args[1]);
         checkIntentViewUrl(args[1]);
         if (backupStartActivity != null)
@@ -1395,11 +1580,7 @@ public class HookerBridge {
 
     // Activity.startActivityForResult(Intent, int)  instance: args={thiz, intent, requestCode}
     public Object hookStartActivityForResult(Object[] args) {
-        String targetPkg = getIntentPackage(args[1]);
-        String currentPkg = getCurrentPackage(args[0]);
-        String key = (targetPkg != null && !targetPkg.isEmpty() && !targetPkg.equals(currentPkg))
-                ? "Activity.startActivity_other" : "Activity.startActivity_self";
-        log(key, targetPkg != null ? targetPkg : "");
+        reportStartActivity(args[0], args[1]);
         logIntentDebug("Activity.startActivityForResult", args[0], args[1]);
         checkIntentViewUrl(args[1]);
         if (backupStartActivityForResult != null)
@@ -1453,11 +1634,7 @@ public class HookerBridge {
     // would otherwise be missed for "关联启动" / startupothers detection.
     public Object hookContextStartActivity(Object[] args) {
         Object intent = args.length > 1 ? args[1] : null;
-        String targetPkg = getIntentPackage(intent);
-        String currentPkg = getCurrentPackage(args[0]);
-        String key = (targetPkg != null && !targetPkg.isEmpty() && !targetPkg.equals(currentPkg))
-                ? "Activity.startActivity_other" : "Activity.startActivity_self";
-        log(key, targetPkg != null ? targetPkg : "");
+        reportStartActivity(args[0], intent);
         logIntentDebug("ContextWrapper.startActivity(I)", args[0], intent);
         if (intent != null) checkIntentViewUrl(intent);
         return safeInvokeObject(backupContextStartActivity, args[0], args[1]);
@@ -1467,15 +1644,31 @@ public class HookerBridge {
     // instance: args={thiz, intent, options}
     public Object hookContextStartActivityWithOptions(Object[] args) {
         Object intent = args.length > 1 ? args[1] : null;
-        String targetPkg = getIntentPackage(intent);
-        String currentPkg = getCurrentPackage(args[0]);
-        String key = (targetPkg != null && !targetPkg.isEmpty() && !targetPkg.equals(currentPkg))
-                ? "Activity.startActivity_other" : "Activity.startActivity_self";
-        log(key, targetPkg != null ? targetPkg : "");
+        reportStartActivity(args[0], intent);
         logIntentDebug("ContextWrapper.startActivity(IB)", args[0], intent);
         if (intent != null) checkIntentViewUrl(intent);
         return safeInvokeObject(backupContextStartActivityWithOptions, args[0],
             args.length > 1 ? args[1] : null, args.length > 2 ? args[2] : null);
+    }
+
+    // Report a startActivity as 关联启动(_other, cross-app) or 自启动(_self, self/no-package).
+    // _self is GATED on FLAG_ACTIVITY_NEW_TASK: ordinary in-task navigation (no NEW_TASK) is benign UI
+    // flow and skipped; launching one's own Activity from a background/non-Activity context REQUIRES
+    // NEW_TASK → that's the real self-launch/自启动 signal. Cuts navigation noise on startupself.
+    private void reportStartActivity(Object thiz, Object intent) {
+        String targetPkg = getIntentPackage(intent);
+        String currentPkg = getCurrentPackage(thiz);
+        if (targetPkg != null && !targetPkg.isEmpty() && !targetPkg.equals(currentPkg)) {
+            log("Activity.startActivity_other", targetPkg);
+        } else if ((getIntentFlags(intent) & 0x10000000) != 0) {   // FLAG_ACTIVITY_NEW_TASK
+            log("Activity.startActivity_self", targetPkg != null ? targetPkg : "");
+        }
+    }
+
+    private static int getIntentFlags(Object intent) {
+        if (intent == null) return 0;
+        try { return (Integer) intent.getClass().getMethod("getFlags").invoke(intent); }
+        catch (Exception e) { return 0; }
     }
 
     private static String getIntentPackage(Object intent) {
@@ -2166,6 +2359,104 @@ public class HookerBridge {
                 : null;
         log("ActivityManager.getRunningServices", list != null ? "count=" + getListSize(list) : "null");
         return list;
+    }
+
+    // ── 2026-06 补充：蓝牙扫描族 / 最近任务 / 已配置WiFi / 多卡订阅 ──────────────
+    // ActivityManager.getRecentTasks(int, int) → List  instance: args={thiz, maxNum, flags}.
+    // API21+ 仅返回调用者相关任务；镜像 getRunningTasks/getRunningServices，归 runningappprocesses。
+    public Object hookGetRecentTasks(Object[] args) {
+        Object list = backupGetRecentTasks != null
+                ? safeInvokeObject(backupGetRecentTasks, args[0], args[1], args[2])
+                : null;
+        log("ActivityManager.getRecentTasks", list != null ? "count=" + getListSize(list) : "null");
+        return list;
+    }
+
+    // BluetoothAdapter.startDiscovery() → boolean  instance: args={thiz}. 扫描周边蓝牙设备(可用于定位)。
+    public Object hookBluetoothStartDiscovery(Object[] args) {
+        log("BluetoothAdapter.startDiscovery", "");
+        Object r = backupBluetoothStartDiscovery != null
+                ? safeInvokeObject(backupBluetoothStartDiscovery, args[0]) : null;
+        return r != null ? r : Boolean.FALSE;
+    }
+
+    // BluetoothAdapter.getBondedDevices() → Set<BluetoothDevice>  instance: args={thiz}. 已配对设备(含MAC)。
+    public Object hookBluetoothGetBondedDevices(Object[] args) {
+        Object v = backupBluetoothGetBondedDevices != null
+                ? safeInvokeObject(backupBluetoothGetBondedDevices, args[0]) : null;
+        log("BluetoothAdapter.getBondedDevices", v != null ? "count=" + getListSize(v) : "null");
+        return v;
+    }
+
+    // BluetoothLeScanner.startScan(ScanCallback) → void  instance: args={thiz, callback}. BLE 低功耗扫描。
+    public Object hookBleStartScan(Object[] args) {
+        log("BluetoothLeScanner.startScan", "");
+        if (backupBleStartScan != null) safeInvokeObject(backupBleStartScan, args[0], args[1]);
+        return null;
+    }
+
+    // BluetoothLeScanner.startScan(List<ScanFilter>, ScanSettings, ScanCallback) → void  现代带过滤重载，同 key。
+    public Object hookBleStartScanFilters(Object[] args) {
+        log("BluetoothLeScanner.startScan", "");
+        if (backupBleStartScanFilters != null)
+            safeInvokeObject(backupBleStartScanFilters, args[0], args[1], args[2], args[3]);
+        return null;
+    }
+
+    // WifiManager.getConfiguredNetworks() → List<WifiConfiguration>  instance: args={thiz}.
+    // 已保存WiFi列表(历史已连网络可画活动/家庭画像)；归 ssid。
+    public Object hookWifiGetConfiguredNetworks(Object[] args) {
+        Object v = backupWifiGetConfiguredNetworks != null
+                ? safeInvokeObject(backupWifiGetConfiguredNetworks, args[0]) : null;
+        log("WifiManager.getConfiguredNetworks", v != null ? "count=" + getListSize(v) : "null");
+        return v;
+    }
+
+    // SubscriptionManager.getActiveSubscriptionInfoList() → List<SubscriptionInfo>  instance: args={thiz}.
+    // 现代多卡设备 IMSI/ICCID/号码来源；归 imsi。
+    public Object hookGetActiveSubscriptionInfoList(Object[] args) {
+        Object v = backupGetActiveSubscriptionInfoList != null
+                ? safeInvokeObject(backupGetActiveSubscriptionInfoList, args[0]) : null;
+        log("SubscriptionManager.getActiveSubscriptionInfoList", v != null ? "count=" + getListSize(v) : "null");
+        return v;
+    }
+
+    // MediaProjection.createVirtualDisplay(name, w, h, dpi, flags, Surface, Callback, Handler) → VirtualDisplay
+    // 实际录屏(创建虚拟显示开始抓帧)；getSystemService(media_projection) 仅是入口，这才是真正捕获。归 screen。
+    // instance: args={thiz, name, w, h, dpi, flags, surface, callback, handler}
+    public Object hookCreateVirtualDisplay(Object[] args) {
+        String name = args.length > 1 && args[1] != null ? args[1].toString() : "";
+        log("MediaProjection.createVirtualDisplay", name);
+        return backupCreateVirtualDisplay != null
+                ? safeInvokeObject(backupCreateVirtualDisplay, args[0], args[1], args[2], args[3],
+                        args[4], args[5], args[6], args[7], args[8])
+                : null;
+    }
+
+    // MediaProjectionManager.createScreenCaptureIntent() → Intent  instance: args={thiz}
+    // 申请截屏/录屏授权(用户consent弹窗的请求)；按"申请→permissions"原则归 permissions，data=录屏截屏。
+    public Object hookCreateScreenCaptureIntent(Object[] args) {
+        log("MediaProjectionManager.createScreenCaptureIntent", "录屏截屏");
+        return backupCreateScreenCaptureIntent != null
+                ? safeInvokeObject(backupCreateScreenCaptureIntent, args[0]) : null;
+    }
+
+    // AccessibilityService.getRootInActiveWindow() → AccessibilityNodeInfo  instance: args={thiz}
+    // 主动抓当前屏幕控件树(无障碍越界读屏，含他应用文本)；基类具体方法、子类继承。
+    // 可被循环调用→限频由 agent dedupFlags(accessibility) 500ms 兜。
+    public Object hookGetRootInActiveWindow(Object[] args) {
+        log("AccessibilityService.getRootInActiveWindow", "");
+        return backupGetRootInActiveWindow != null
+                ? safeInvokeObject(backupGetRootInActiveWindow, args[0]) : null;
+    }
+
+    // AccessibilityEvent.getText() → List<CharSequence>  instance: args={thiz}
+    // 被动事件流取数点(具体方法，替代难挂的抽象 onAccessibilityEvent)。
+    // 只监测"有提取事件文本"这一动作、不取文本内容(避免记录密码等敏感输入)；高频→agent dedupFlags(accessibility) 500ms 限频。
+    public Object hookAccessibilityEventGetText(Object[] args) {
+        log("AccessibilityEvent.getText", "");
+        return backupAccessibilityEventGetText != null
+                ? safeInvokeObject(backupAccessibilityEventGetText, args[0]) : null;
     }
 
     // WifiInfo.getSSID()  instance: args={thiz}
