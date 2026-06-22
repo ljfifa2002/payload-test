@@ -29,8 +29,8 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class Obf {
     private Obf() {}
 
-    // These 32 bytes MUST match StringObfFactory.KEY byte-for-byte. Rotate both
-    // together. Generated with a CSPRNG (see tools/gen-obf-key.ps1).
+    // These 32 bytes MUST match tools/ObfTransform.java's KEY byte-for-byte.
+    // Rotate both together via pecker-agent/tools/rotate-keys.cmd.
     private static final byte[] KEY = {
         (byte)0xFB, (byte)0x5B, (byte)0xA3, (byte)0x43, (byte)0x55, (byte)0xDF, (byte)0xD8, (byte)0x13,
         (byte)0x54, (byte)0xA3, (byte)0xA9, (byte)0x09, (byte)0x56, (byte)0xFD, (byte)0x41, (byte)0x11,

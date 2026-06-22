@@ -1,4 +1,4 @@
-/* enc_dex.c — AES-256-CTR 加密 hooker.dex → hooker.dex.enc（[16B IV][密文]）
+/* enc_dex.c — AES-256-CTR 加密 hooker.dex → hookere.dex（[16B IV][密文]）
  *
  * 关键：#include 与 native 同一份 aes.c，CTR 计数器实现完全一致，绝不会解错。
  *
@@ -7,8 +7,8 @@
  * 编译（Windows MSVC）:
  *   cl /O2 /I..\app\src\main\cpp enc_dex.c ..\app\src\main\cpp\aes.c
  * 用法:
- *   ./enc_dex hooker.dex hooker.dex.enc
- *   然后把 hooker.dex.enc 放到 pecker-agent 的 tools/peckerd/（不再发明文 hooker.dex）
+ *   ./enc_dex hooker.dex hookere.dex
+ *   然后把 hookere.dex 放到 pecker-agent 的 tools/peckerd/（不再发明文 hooker.dex）
  *
  * aes.h 已配 AES256 + CTR；KEY 必须与 hooks.cpp 的 DEX_KEY 逐字节一致。
  */

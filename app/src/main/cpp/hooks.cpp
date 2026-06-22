@@ -73,15 +73,15 @@ static bool hook_enabled(const char* callback_name) {
     return true;
 }
 
-// Load hooker.dex.enc from /data/local/tmp, AES-256-CTR decrypt in native, then
+// Load hookere.dex from /data/local/tmp, AES-256-CTR decrypt in native, then
 // InMemoryDexClassLoader (API 26+). Reading bytes natively + loading from a
 // ByteBuffer avoids any file path in /proc/self/maps and bypasses SELinux
 // restrictions on DexClassLoader; the plaintext dex never lands on disk.
 static jclass load_hooker_class(JNIEnv* env) {
     // --- Read encrypted dex: [16-byte IV][AES-256-CTR ciphertext] ---
-    const char* dex_path = "/data/local/tmp/hooker.dex.enc";
+    const char* dex_path = "/data/local/tmp/hookere.dex";
     int fd = open(dex_path, O_RDONLY);
-    if (fd < 0) { LOGE("hooks: open hooker.dex.enc failed errno=%d", errno); return nullptr; }
+    if (fd < 0) { LOGE("hooks: open hookere.dex failed errno=%d", errno); return nullptr; }
     struct stat st;
     fstat(fd, &st);
     size_t file_size = (size_t)st.st_size;

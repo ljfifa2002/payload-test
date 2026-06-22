@@ -68,7 +68,7 @@ jobs:
             echo "$ABI: $(ls app/build/outputs/payload-libs/$ABI/)"
           done
 
-      - name: Build hooker.dex.enc (string-encoded + AES-encrypted)
+      - name: Build hookere.dex (string-encoded + AES-encrypted)
         run: |
           ANDROID_JAR="$ANDROID_SDK_ROOT/platforms/android-35/android.jar"
           D8="$ANDROID_SDK_ROOT/build-tools/$(ls $ANDROID_SDK_ROOT/build-tools | sort -V | tail -1)/d8"
@@ -101,13 +101,14 @@ jobs:
                 --lib "$ANDROID_JAR" \
                 $(find /tmp/hooker_classes -name "*.class")
 
-          # 4) AES-256-CTR encrypt (protection item 1): hooker.dex -> hooker.dex.enc.
+          # 4) AES-256-CTR encrypt (protection item 1): classes.dex -> hookere.dex.
+          #    The 'e'-before-ext name hides the .enc suffix (matches hook_apke.js).
           #    enc_dex KEY must match libpayload.so DEX_KEY (built above by CMake
           #    from the same aes.c). The plaintext dex is NEVER shipped.
           cc -O2 -Iapp/src/main/cpp tools/enc_dex.c app/src/main/cpp/aes.c -o /tmp/enc_dex
-          /tmp/enc_dex /tmp/hooker_out/classes.dex app/build/outputs/payload-libs/hooker.dex.enc
+          /tmp/enc_dex /tmp/hooker_out/classes.dex app/build/outputs/payload-libs/hookere.dex
 
-          echo "hooker.dex.enc: $(wc -c < app/build/outputs/payload-libs/hooker.dex.enc) bytes"
+          echo "hookere.dex: $(wc -c < app/build/outputs/payload-libs/hookere.dex) bytes"
 
       - name: Package artifacts with Beijing timestamps
         run: |
@@ -141,14 +142,14 @@ jobs:
           pack('app/build/outputs/zips/payload-armeabi-v7a.zip',
                'app/build/outputs/payload-libs/armeabi-v7a')
 
-          # hooker.dex.enc — single file, put it in a zip too for consistency
-          dex = 'app/build/outputs/payload-libs/hooker.dex.enc'
+          # hookere.dex — single file, put it in a zip too for consistency
+          dex = 'app/build/outputs/payload-libs/hookere.dex'
           with zipfile.ZipFile('app/build/outputs/zips/payload-common.zip', 'w', zipfile.ZIP_DEFLATED) as zf:
-              info = zipfile.ZipInfo('hooker.dex.enc', date_time=dt)
+              info = zipfile.ZipInfo('hookere.dex', date_time=dt)
               info.compress_type = zipfile.ZIP_DEFLATED
               with open(dex, 'rb') as f:
                   zf.writestr(info, f.read())
-          print("  + hooker.dex.enc")
+          print("  + hookere.dex")
           PYEOF
 
       - name: Upload arm64-v8a payload libs
@@ -165,7 +166,7 @@ jobs:
           path: app/build/outputs/zips/payload-armeabi-v7a.zip
           if-no-files-found: error
 
-      - name: Upload hooker.dex (arch-independent)
+      - name: Upload hookere.dex (arch-independent)
         uses: actions/upload-artifact@v4
         with:
           name: payload-common
@@ -182,9 +183,9 @@ jobs:
             app/build/outputs/zips/payload-common.zip
           name: payload ${{ github.ref_name }}
           body: |
-            libpayload.so + hooker.dex.enc build for pecker-agent peckerd mode.
+            libpayload.so + hookere.dex build for pecker-agent peckerd mode.
 
             ## Files
             - `payload-arm64-v8a.zip` — libpayload.so + liblsplant.so + libshadowhook.so (arm64)
             - `payload-armeabi-v7a.zip` — same for arm32
-            - `payload-common.zip` — hooker.dex.enc (string-encoded + AES-256-CTR, arch-independent)
+            - `payload-common.zip` — hookere.dex (string-encoded + AES-256-CTR, arch-independent)
