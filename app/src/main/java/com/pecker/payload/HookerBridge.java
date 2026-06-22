@@ -579,28 +579,28 @@ public class HookerBridge {
     public Object hookGetDeviceId(Object[] args) {
         Object thiz = args[0];
         String v = backupGetDeviceId != null ? safeInvoke(backupGetDeviceId, thiz) : null;
-        log("getDeviceId", v != null ? v : "");
+        log(Obf.s("getDeviceId"), v != null ? v : "");
         return v;
     }
 
     public Object hookGetSubscriberId(Object[] args) {
         Object thiz = args[0];
         String v = backupGetSubscriberId != null ? safeInvoke(backupGetSubscriberId, thiz) : null;
-        log("getSubscriberId", v != null ? v : "");
+        log(Obf.s("getSubscriberId"), v != null ? v : "");
         return v;
     }
 
     public Object hookGetSimSerialNumber(Object[] args) {
         Object thiz = args[0];
         String v = backupGetSimSerialNumber != null ? safeInvoke(backupGetSimSerialNumber, thiz) : null;
-        log("getSimSerialNumber", v != null ? v : "");
+        log(Obf.s("getSimSerialNumber"), v != null ? v : "");
         return v;
     }
 
     public Object hookGetLine1Number(Object[] args) {
         Object thiz = args[0];
         String v = backupGetLine1Number != null ? safeInvoke(backupGetLine1Number, thiz) : null;
-        log("getLine1Number", v != null ? v : "");
+        log(Obf.s("getLine1Number"), v != null ? v : "");
         return v;
     }
 
@@ -610,13 +610,13 @@ public class HookerBridge {
     public Object hookGetImei(Object[] args) {
         Object thiz = args[0];
         String v = backupGetImei != null ? safeInvoke(backupGetImei, thiz) : null;
-        log("TelephonyManager.getImei", v != null ? v : "");
+        log(Obf.s("TelephonyManager.getImei"), v != null ? v : "");
         return v;
     }
     public Object hookGetMeid(Object[] args) {
         Object thiz = args[0];
         String v = backupGetMeid != null ? safeInvoke(backupGetMeid, thiz) : null;
-        log("TelephonyManager.getMeid", v != null ? v : "");
+        log(Obf.s("TelephonyManager.getMeid"), v != null ? v : "");
         return v;
     }
     // Slot overloads getImei(int)/getMeid(int)/getDeviceId(int) — behavior detection only:
@@ -625,17 +625,17 @@ public class HookerBridge {
     // empties anyway). Own handler+backup per overload; reuses the no-arg config key.
     public Object hookGetImeiSlot(Object[] args) {
         Object v = backupGetImeiSlot != null ? safeInvokeObject(backupGetImeiSlot, args[0], args[1]) : null;
-        log("TelephonyManager.getImei", v instanceof String ? (String) v : "");
+        log(Obf.s("TelephonyManager.getImei"), v instanceof String ? (String) v : "");
         return v;
     }
     public Object hookGetMeidSlot(Object[] args) {
         Object v = backupGetMeidSlot != null ? safeInvokeObject(backupGetMeidSlot, args[0], args[1]) : null;
-        log("TelephonyManager.getMeid", v instanceof String ? (String) v : "");
+        log(Obf.s("TelephonyManager.getMeid"), v instanceof String ? (String) v : "");
         return v;
     }
     public Object hookGetDeviceIdSlot(Object[] args) {
         Object v = backupGetDeviceIdSlot != null ? safeInvokeObject(backupGetDeviceIdSlot, args[0], args[1]) : null;
-        log("getDeviceId", v instanceof String ? (String) v : "");
+        log(Obf.s("getDeviceId"), v instanceof String ? (String) v : "");
         return v;
     }
     // Build.getSerial() — static, API 26+, needs READ_PHONE_STATE.
@@ -645,7 +645,7 @@ public class HookerBridge {
             try { v = (String) backupBuildGetSerial.invoke(null); }
             catch (Exception e) { Log.e(TAG, "backup Build.getSerial failed: " + e); }
         }
-        log("Build.getSerial", v != null ? v : "");
+        log(Obf.s("Build.getSerial"), v != null ? v : "");
         return v;
     }
     // MediaDrm.getPropertyByteArray(String) — Widevine device fingerprint; only the
@@ -654,7 +654,7 @@ public class HookerBridge {
         String prop = args[1] != null ? args[1].toString() : "";
         Object v = backupMediaDrmGetPropertyByteArray != null
                 ? safeInvokeObject(backupMediaDrmGetPropertyByteArray, args[0], args[1]) : null;
-        if ("deviceUniqueId".equals(prop)) log("MediaDrm.getDeviceId", prop);
+        if ("deviceUniqueId".equals(prop)) log(Obf.s("MediaDrm.getDeviceId"), prop);
         return v;
     }
     // SystemProperties.get(String) — static, extremely high-frequency framework call;
@@ -666,27 +666,27 @@ public class HookerBridge {
             try { v = (String) backupSystemPropertiesGet.invoke(null, args[0]); }
             catch (Exception e) { Log.e(TAG, "backup SystemProperties.get failed: " + e); }
         }
-        if (key.toLowerCase().contains("serial")) log("SystemProperties.get", key);
+        if (key.toLowerCase().contains("serial")) log(Obf.s("SystemProperties.get"), key);
         return v;
     }
     // BluetoothAdapter.getAddress()/getName() — instance.
     public Object hookBluetoothGetAddress(Object[] args) {
         Object thiz = args[0];
         String v = backupBluetoothGetAddress != null ? safeInvoke(backupBluetoothGetAddress, thiz) : null;
-        log("BluetoothAdapter.getAddress", v != null ? v : "");
+        log(Obf.s("BluetoothAdapter.getAddress"), v != null ? v : "");
         return v;
     }
     public Object hookBluetoothGetName(Object[] args) {
         Object thiz = args[0];
         String v = backupBluetoothGetName != null ? safeInvoke(backupBluetoothGetName, thiz) : null;
-        log("BluetoothAdapter.getName", v != null ? v : "");
+        log(Obf.s("BluetoothAdapter.getName"), v != null ? v : "");
         return v;
     }
     // OAID (移动安全联盟 MSA) MdidSdkHelper.InitSdk(Context, boolean, IIdentifierListener) —
     // static, app-bundled. OAID itself resolves async via the listener; we report the request
     // (the behavior), not the value. Pass through with the original 3 args.
     public Object hookOaidInitSdk(Object[] args) {
-        log("MdidSdkHelper.InitSdk", "");
+        log(Obf.s("MdidSdkHelper.InitSdk"), "");
         if (backupOaidInitSdk != null) {
             try { return backupOaidInitSdk.invoke(null, args[0], args[1], args[2]); }
             catch (Exception e) { Log.e(TAG, "backup MdidSdkHelper.InitSdk failed: " + e); }
@@ -725,41 +725,41 @@ public class HookerBridge {
         String pkg = args[1] != null ? args[1].toString() : "";
         Object v = backupGetPackageInfo != null
                 ? safeInvokeObject(backupGetPackageInfo, args[0], args[1], args[2]) : null;
-        if (!pkg.isEmpty() && !pkg.equals(ownPackage())) log("PackageManager.getPackageInfo", pkg);
+        if (!pkg.isEmpty() && !pkg.equals(ownPackage())) log(Obf.s("PackageManager.getPackageInfo"), pkg);
         return v;
     }
     public Object hookGetApplicationInfo(Object[] args) {
         String pkg = args[1] != null ? args[1].toString() : "";
         Object v = backupGetApplicationInfo != null
                 ? safeInvokeObject(backupGetApplicationInfo, args[0], args[1], args[2]) : null;
-        if (!pkg.isEmpty() && !pkg.equals(ownPackage())) log("PackageManager.getApplicationInfo", pkg);
+        if (!pkg.isEmpty() && !pkg.equals(ownPackage())) log(Obf.s("PackageManager.getApplicationInfo"), pkg);
         return v;
     }
     // queryIntentActivities(Intent, int) / resolveActivity(Intent, int) — app discovery by intent.
     public Object hookQueryIntentActivities(Object[] args) {
         Object v = backupQueryIntentActivities != null
                 ? safeInvokeObject(backupQueryIntentActivities, args[0], args[1], args[2]) : null;
-        log("PackageManager.queryIntentActivities", intentDesc(args[1]));
+        log(Obf.s("PackageManager.queryIntentActivities"), intentDesc(args[1]));
         return v;
     }
     public Object hookResolveActivity(Object[] args) {
         Object v = backupResolveActivity != null
                 ? safeInvokeObject(backupResolveActivity, args[0], args[1], args[2]) : null;
-        log("PackageManager.resolveActivity", intentDesc(args[1]));
+        log(Obf.s("PackageManager.resolveActivity"), intentDesc(args[1]));
         return v;
     }
     public Object hookGetLaunchIntentForPackage(Object[] args) {
         String pkg = args[1] != null ? args[1].toString() : "";
         Object v = backupGetLaunchIntentForPackage != null
                 ? safeInvokeObject(backupGetLaunchIntentForPackage, args[0], args[1]) : null;
-        if (!pkg.isEmpty() && !pkg.equals(ownPackage())) log("PackageManager.getLaunchIntentForPackage", pkg);
+        if (!pkg.isEmpty() && !pkg.equals(ownPackage())) log(Obf.s("PackageManager.getLaunchIntentForPackage"), pkg);
         return v;
     }
     // getInstalledPackages(PackageInfoFlags) — API 33 overload; SAME behavior → reuse old key.
     public Object hookGetInstalledPackagesFlags(Object[] args) {
         Object list = backupGetInstalledPackagesFlags != null
                 ? safeInvokeObject(backupGetInstalledPackagesFlags, args[0], args[1]) : null;
-        log("PackageManager.getInstalledPackages", list != null ? "count=" + getListSize(list) : "null");
+        log(Obf.s("PackageManager.getInstalledPackages"), list != null ? "count=" + getListSize(list) : "null");
         return list;
     }
     // getInstalledApplications(ApplicationInfoFlags) — API 33 overload; SAME behavior → reuse old key
@@ -767,27 +767,27 @@ public class HookerBridge {
     public Object hookGetInstalledApplicationsFlags(Object[] args) {
         Object list = backupGetInstalledApplicationsFlags != null
                 ? safeInvokeObject(backupGetInstalledApplicationsFlags, args[0], args[1]) : null;
-        log("PackageManager.getInstalledApplications", list != null ? "count=" + getListSize(list) : "null");
+        log(Obf.s("PackageManager.getInstalledApplications"), list != null ? "count=" + getListSize(list) : "null");
         return list;
     }
     // UsageStatsManager.queryUsageStats(int, long, long)  args={thiz, intervalType, begin, end}
     public Object hookQueryUsageStats(Object[] args) {
         Object v = backupQueryUsageStats != null
                 ? safeInvokeObject(backupQueryUsageStats, args[0], args[1], args[2], args[3]) : null;
-        log("UsageStatsManager.queryUsageStats", v != null ? "count=" + getListSize(v) : "null");
+        log(Obf.s("UsageStatsManager.queryUsageStats"), v != null ? "count=" + getListSize(v) : "null");
         return v;
     }
     // Geocoder.getFromLocation(double, double, int)  args={thiz, lat, lng, maxResults}
     public Object hookGeocoderGetFromLocation(Object[] args) {
         Object v = backupGeocoderGetFromLocation != null
                 ? safeInvokeObject(backupGeocoderGetFromLocation, args[0], args[1], args[2], args[3]) : null;
-        log("Geocoder.getFromLocation", args[1] + "," + args[2]);
+        log(Obf.s("Geocoder.getFromLocation"), args[1] + "," + args[2]);
         return v;
     }
     // LocationManager.requestSingleUpdate(String, LocationListener, Looper)
     public Object hookRequestSingleUpdate(Object[] args) {
         String provider = args[1] != null ? args[1].toString() : "";
-        log("LocationManager.requestSingleUpdate", provider);
+        log(Obf.s("LocationManager.requestSingleUpdate"), provider);
         if (backupRequestSingleUpdate != null)
             return safeInvokeObject(backupRequestSingleUpdate, args[0], args[1], args[2], args[3]);
         return null;
@@ -798,7 +798,7 @@ public class HookerBridge {
     // cancellationSignal, executor, consumer}. (API31 LocationRequest overload not hooked.)
     public Object hookGetCurrentLocation(Object[] args) {
         String provider = args[1] != null ? args[1].toString() : "";
-        log("LocationManager.getCurrentLocation", provider);
+        log(Obf.s("LocationManager.getCurrentLocation"), provider);
         if (backupGetCurrentLocation != null)
             return safeInvokeObject(backupGetCurrentLocation, args[0], args[1], args[2], args[3], args[4]);
         return null;
@@ -807,7 +807,7 @@ public class HookerBridge {
     // hook point (the actual getLastLocation() lives on an obfuscated impl). Reports fused-
     // location usage when the app acquires the client.
     public Object hookFusedLocationClient(Object[] args) {
-        log("FusedLocationProviderClient", "");
+        log(Obf.s("FusedLocationProviderClient"), "");
         if (backupFusedLocationClient != null) {
             try { return backupFusedLocationClient.invoke(null, args[0]); }
             catch (Exception e) { Log.e(TAG, "backup getFusedLocationProviderClient failed: " + e); }
@@ -818,27 +818,27 @@ public class HookerBridge {
     public Object hookWifiGetConnectionInfo(Object[] args) {
         Object v = backupWifiGetConnectionInfo != null
                 ? safeInvokeObject(backupWifiGetConnectionInfo, args[0]) : null;
-        log("WifiManager.getConnectionInfo", "");
+        log(Obf.s("WifiManager.getConnectionInfo"), "");
         return v;
     }
     public Object hookWifiGetScanResults(Object[] args) {
         Object v = backupWifiGetScanResults != null
                 ? safeInvokeObject(backupWifiGetScanResults, args[0]) : null;
-        log("WifiManager.getScanResults", v != null ? "count=" + getListSize(v) : "null");
+        log(Obf.s("WifiManager.getScanResults"), v != null ? "count=" + getListSize(v) : "null");
         return v;
     }
     // AccountManager.getAccounts() / getAccountsByType(String)  instance
     public Object hookGetAccounts(Object[] args) {
         Object v = backupGetAccounts != null
                 ? safeInvokeObject(backupGetAccounts, args[0]) : null;
-        log("AccountManager.getAccounts", "");
+        log(Obf.s("AccountManager.getAccounts"), "");
         return v;
     }
     public Object hookGetAccountsByType(Object[] args) {
         String type = args[1] != null ? args[1].toString() : "";
         Object v = backupGetAccountsByType != null
                 ? safeInvokeObject(backupGetAccountsByType, args[0], args[1]) : null;
-        log("AccountManager.getAccountsByType", type);
+        log(Obf.s("AccountManager.getAccountsByType"), type);
         return v;
     }
     // getAuthToken — fetches an account's auth token (far more sensitive than the account name).
@@ -848,14 +848,14 @@ public class HookerBridge {
     // args = {thiz, account, authTokenType, options, activity|notifyAuthFailure, callback, handler}
     public Object hookGetAuthTokenActivity(Object[] args) {
         String tokenType = args[2] != null ? args[2].toString() : "";
-        log("AccountManager.getAuthToken", tokenType);
+        log(Obf.s("AccountManager.getAuthToken"), tokenType);
         return backupGetAuthTokenActivity != null
                 ? safeInvokeObject(backupGetAuthTokenActivity, args[0], args[1], args[2], args[3], args[4], args[5], args[6])
                 : null;
     }
     public Object hookGetAuthTokenNotify(Object[] args) {
         String tokenType = args[2] != null ? args[2].toString() : "";
-        log("AccountManager.getAuthToken", tokenType);
+        log(Obf.s("AccountManager.getAuthToken"), tokenType);
         return backupGetAuthTokenNotify != null
                 ? safeInvokeObject(backupGetAuthTokenNotify, args[0], args[1], args[2], args[3], args[4], args[5], args[6])
                 : null;
@@ -869,11 +869,11 @@ public class HookerBridge {
                 ? safeInvoke(backupSettingsSecureGetString, null, cr, name)
                 : null;
         if ("android_id".equals(name)) {
-            log("getString_android_id", v != null ? v : "");
+            log(Obf.s("getString_android_id"), v != null ? v : "");
         } else if ("bluetooth_address".equals(name)) {
-            log("getString_bluetooth_address", v != null ? v : "");
+            log(Obf.s("getString_bluetooth_address"), v != null ? v : "");
         } else if ("bluetooth_name".equals(name)) {
-            log("getString_bluetooth_name", v != null ? v : "");
+            log(Obf.s("getString_bluetooth_name"), v != null ? v : "");
         }
         return v;
     }
@@ -881,7 +881,7 @@ public class HookerBridge {
     public Object hookGetMacAddress(Object[] args) {
         Object thiz = args[0];
         String v = backupWifiGetMacAddress != null ? safeInvoke(backupWifiGetMacAddress, thiz) : null;
-        log("getMacAddress", v != null ? v : "");
+        log(Obf.s("getMacAddress"), v != null ? v : "");
         return v;
     }
 
@@ -896,7 +896,7 @@ public class HookerBridge {
                 if (i > 0) sb.append(':');
                 sb.append(String.format("%02x", v[i] & 0xff));
             }
-            log("getHardwareAddress", sb.toString());
+            log(Obf.s("getHardwareAddress"), sb.toString());
         }
         return v;
     }
@@ -907,7 +907,7 @@ public class HookerBridge {
         Object bundle = args[1];
         // Log the activity class name in unified JSON format
         String activityName = thiz != null ? thiz.getClass().getName() : "?";
-        log("Activity.onCreate", activityName);
+        log(Obf.s("Activity.onCreate"), activityName);
         scheduleScreenScan(thiz);
         scheduleUiTextScan(thiz);
         if (backupActivityOnCreate != null) {
@@ -1303,12 +1303,12 @@ public class HookerBridge {
             try {
                 double lat = (Double) location.getClass().getMethod("getLatitude").invoke(location);
                 double lon = (Double) location.getClass().getMethod("getLongitude").invoke(location);
-                log("LocationManager.getLastKnownLocation", provider + " " + lat + "," + lon);
+                log(Obf.s("LocationManager.getLastKnownLocation"), provider + " " + lat + "," + lon);
             } catch (Exception e) {
-                log("LocationManager.getLastKnownLocation", provider);
+                log(Obf.s("LocationManager.getLastKnownLocation"), provider);
             }
         } else {
-            log("LocationManager.getLastKnownLocation", provider);
+            log(Obf.s("LocationManager.getLastKnownLocation"), provider);
         }
         return location;
     }
@@ -1321,7 +1321,7 @@ public class HookerBridge {
             try { v = (Double) backupLocationGetLatitude.invoke(thiz); }
             catch (Exception e) { Log.e(TAG, "backup getLatitude failed: " + e); }
         }
-        log("Location.getLatitude", v != null ? v.toString() : "0.0");
+        log(Obf.s("Location.getLatitude"), v != null ? v.toString() : "0.0");
         return v != null ? v : 0.0;
     }
 
@@ -1333,7 +1333,7 @@ public class HookerBridge {
             try { v = (Double) backupLocationGetLongitude.invoke(thiz); }
             catch (Exception e) { Log.e(TAG, "backup getLongitude failed: " + e); }
         }
-        log("Location.getLongitude", v != null ? v.toString() : "0.0");
+        log(Obf.s("Location.getLongitude"), v != null ? v.toString() : "0.0");
         return v != null ? v : 0.0;
     }
 
@@ -1349,7 +1349,7 @@ public class HookerBridge {
     // args={thiz, provider, minTime, minDistance, listener}
     public Object hookRequestLocationUpdatesStr(Object[] args) {
         String provider = args[1] != null ? args[1].toString() : "?";
-        log("LocationManager.requestLocationUpdates", fmtLocationUpdate(provider, args, 4));
+        log(Obf.s("LocationManager.requestLocationUpdates"), fmtLocationUpdate(provider, args, 4));
         if (backupRequestLocationUpdatesStr != null)
             safeInvokeObject(backupRequestLocationUpdatesStr, args[0], args[1], args[2], args[3], args[4]);
         return null;
@@ -1359,7 +1359,7 @@ public class HookerBridge {
     // args={thiz, provider, minTime, minDistance, listener, looper}
     public Object hookRequestLocationUpdatesStrLooper(Object[] args) {
         String provider = args[1] != null ? args[1].toString() : "?";
-        log("LocationManager.requestLocationUpdates", fmtLocationUpdate(provider, args, 4));
+        log(Obf.s("LocationManager.requestLocationUpdates"), fmtLocationUpdate(provider, args, 4));
         if (backupRequestLocationUpdatesStrLooper != null)
             safeInvokeObject(backupRequestLocationUpdatesStrLooper, args[0], args[1], args[2], args[3], args[4], args[5]);
         return null;
@@ -1369,7 +1369,7 @@ public class HookerBridge {
     // args={thiz, criteria, minTime, minDistance, listener}
     public Object hookRequestLocationUpdatesCriteria(Object[] args) {
         String criteria = args[1] != null ? criteriaDesc(args[1]) : "?";
-        log("LocationManager.requestLocationUpdates", fmtLocationUpdate(criteria, args, 4));
+        log(Obf.s("LocationManager.requestLocationUpdates"), fmtLocationUpdate(criteria, args, 4));
         if (backupRequestLocationUpdatesCriteria != null)
             safeInvokeObject(backupRequestLocationUpdatesCriteria, args[0], args[1], args[2], args[3], args[4]);
         return null;
@@ -1379,7 +1379,7 @@ public class HookerBridge {
     // args={thiz, criteria, minTime, minDistance, listener, looper}
     public Object hookRequestLocationUpdatesCriteriaLooper(Object[] args) {
         String criteria = args[1] != null ? criteriaDesc(args[1]) : "?";
-        log("LocationManager.requestLocationUpdates", fmtLocationUpdate(criteria, args, 4));
+        log(Obf.s("LocationManager.requestLocationUpdates"), fmtLocationUpdate(criteria, args, 4));
         if (backupRequestLocationUpdatesCriteriaLooper != null)
             safeInvokeObject(backupRequestLocationUpdatesCriteriaLooper, args[0], args[1], args[2], args[3], args[4], args[5]);
         return null;
@@ -1418,7 +1418,7 @@ public class HookerBridge {
     // CameraManager.openCamera(String, StateCallback, Handler)  instance: args={thiz, cameraId, cb, handler}
     public Object hookCameraManagerOpenCamera(Object[] args) {
         String cameraId = args[1] != null ? args[1].toString() : "";
-        log("Camera2.openCamera", cameraId);
+        log(Obf.s("Camera2.openCamera"), cameraId);
         if (backupCameraManagerOpenCamera != null)
             safeInvokeObject(backupCameraManagerOpenCamera, args[0], args[1], args[2], args[3]);
         return null;
@@ -1429,7 +1429,7 @@ public class HookerBridge {
     // URL.openConnection()  instance: args={thiz}
     public Object hookUrlOpenConnection(Object[] args) {
         String url = args[0] != null ? args[0].toString() : "";
-        log("URL.openConnection", url);
+        log(Obf.s("URL.openConnection"), url);
         return backupUrlOpenConnection != null
                 ? safeInvokeObject(backupUrlOpenConnection, args[0])
                 : null;
@@ -1439,9 +1439,9 @@ public class HookerBridge {
     public Object hookOkHttpNewCall(Object[] args) {
         try {
             String url = args[1].getClass().getMethod("url").invoke(args[1]).toString();
-            log("OkHttpClient.newCall", url);
+            log(Obf.s("OkHttpClient.newCall"), url);
         } catch (Exception e) {
-            log("OkHttpClient.newCall", "?");
+            log(Obf.s("OkHttpClient.newCall"), "?");
         }
         return backupOkHttpNewCall != null
                 ? safeInvokeObject(backupOkHttpNewCall, args[0], args[1])
@@ -1466,14 +1466,14 @@ public class HookerBridge {
                 }
             } catch (Exception ignored) {}
         }
-        log("ClipboardManager.getPrimaryClip", text);
-        log("ClipboardManager.getText", text);
+        log(Obf.s("ClipboardManager.getPrimaryClip"), text);
+        log(Obf.s("ClipboardManager.getText"), text);
         return clip;
     }
 
     // Camera.open()  static: args={}
     public Object hookCameraOpen0(Object[] args) {
-        log("Camera.open", "default");
+        log(Obf.s("Camera.open"), "default");
         return backupCameraOpen0 != null
                 ? safeInvokeObject(backupCameraOpen0, null)
                 : null;
@@ -1482,7 +1482,7 @@ public class HookerBridge {
     // Camera.open(int cameraId)  static: args={cameraId}
     public Object hookCameraOpenInt(Object[] args) {
         String id = args[0] != null ? args[0].toString() : "?";
-        log("Camera.open", id);
+        log(Obf.s("Camera.open"), id);
         return backupCameraOpenInt != null
                 ? safeInvokeObject(backupCameraOpenInt, null, args[0])
                 : null;
@@ -1490,7 +1490,7 @@ public class HookerBridge {
 
     // AudioRecord.startRecording()  instance: args={thiz}
     public Object hookAudioRecordStartRecording(Object[] args) {
-        log("AudioRecord.startRecording", "");
+        log(Obf.s("AudioRecord.startRecording"), "");
         if (backupAudioRecordStartRecording != null)
             safeInvokeObject(backupAudioRecordStartRecording, args[0]);
         return null;
@@ -1512,7 +1512,7 @@ public class HookerBridge {
                 return list;
             }
         }
-        log("ActivityManager.getRunningAppProcesses", list != null ? "count=" + getListSize(list) : "null");
+        log(Obf.s("ActivityManager.getRunningAppProcesses"), list != null ? "count=" + getListSize(list) : "null");
         return list;
     }
 
@@ -1524,7 +1524,7 @@ public class HookerBridge {
     // Runtime.exec(String)  instance: args={thiz, cmd}
     public Object hookRuntimeExecStr(Object[] args) {
         String cmd = args[1] != null ? args[1].toString() : "";
-        log("Runtime.exec", cmd);
+        log(Obf.s("Runtime.exec"), cmd);
         return backupRuntimeExecStr != null
                 ? safeInvokeObject(backupRuntimeExecStr, args[0], args[1])
                 : null;
@@ -1541,7 +1541,7 @@ public class HookerBridge {
             }
             cmd = sb.toString();
         }
-        log("Runtime.exec", cmd);
+        log(Obf.s("Runtime.exec"), cmd);
         return backupRuntimeExecArray != null
                 ? safeInvokeObject(backupRuntimeExecArray, args[0], args[1])
                 : null;
@@ -1554,7 +1554,7 @@ public class HookerBridge {
             Object cmdList = args[0].getClass().getMethod("command").invoke(args[0]);
             cmd = cmdList != null ? cmdList.toString() : "";
         } catch (Exception ignored) {}
-        log("ProcessBuilder.start", cmd);
+        log(Obf.s("ProcessBuilder.start"), cmd);
         return backupProcessBuilderStart != null
                 ? safeInvokeObject(backupProcessBuilderStart, args[0])
                 : null;
@@ -1659,9 +1659,9 @@ public class HookerBridge {
         String targetPkg = getIntentPackage(intent);
         String currentPkg = getCurrentPackage(thiz);
         if (targetPkg != null && !targetPkg.isEmpty() && !targetPkg.equals(currentPkg)) {
-            log("Activity.startActivity_other", targetPkg);
+            log(Obf.s("Activity.startActivity_other"), targetPkg);
         } else if ((getIntentFlags(intent) & 0x10000000) != 0) {   // FLAG_ACTIVITY_NEW_TASK
-            log("Activity.startActivity_self", targetPkg != null ? targetPkg : "");
+            log(Obf.s("Activity.startActivity_self"), targetPkg != null ? targetPkg : "");
         }
     }
 
@@ -1697,7 +1697,7 @@ public class HookerBridge {
 
     // MediaRecorder.start()  instance: args={thiz}
     public Object hookMediaRecorderStart(Object[] args) {
-        log("MediaRecorder.start_audio", "");
+        log(Obf.s("MediaRecorder.start_audio"), "");
         if (backupMediaRecorderStart != null)
             safeInvokeObject(backupMediaRecorderStart, args[0]);
         return null;
@@ -1713,7 +1713,7 @@ public class HookerBridge {
         }
         if ("android.intent.action.BOOT_COMPLETED".equals(action) ||
                 "android.intent.action.QUICKBOOT_POWERON".equals(action)) {
-            log("BroadcastReceiver.onReceive_BOOT", action != null ? action : "");
+            log(Obf.s("BroadcastReceiver.onReceive_BOOT"), action != null ? action : "");
         }
         if (backupBroadcastReceiverOnReceive != null)
             safeInvokeObject(backupBroadcastReceiverOnReceive, args[0], args[1], args[2]);
@@ -2041,7 +2041,7 @@ public class HookerBridge {
     // args={thiz, hostname, peerCertificates}
     public Object hookCertificatePinnerCheck(Object[] args) {
         String host = args[1] != null ? args[1].toString() : "?";
-        log("SSLPinning.bypass", "CertificatePinner.check host=" + host);
+        log(Obf.s("SSLPinning.bypass"), "CertificatePinner.check host=" + host);
         // Do NOT call backup — returning null bypasses the pin check entirely.
         return null;
     }
@@ -2050,7 +2050,7 @@ public class HookerBridge {
     // Replace TrustManagers with a trust-all proxy so all certs are accepted.
     // args={thiz, keyManagers, trustManagers, secureRandom}
     public Object hookSslContextInit(Object[] args) {
-        log("SSLPinning.bypass", "SSLContext.init replaced TrustManager");
+        log(Obf.s("SSLPinning.bypass"), "SSLContext.init replaced TrustManager");
         Object trustAll = buildTrustAllManager();
         Object tmArray = trustAll != null
                 ? java.lang.reflect.Array.newInstance(trustAll.getClass().getInterfaces()[0], 1)
@@ -2068,7 +2068,7 @@ public class HookerBridge {
     // Replace with an always-true verifier so hostname mismatches are ignored.
     // args={verifier}
     public Object hookSetDefaultHostnameVerifier(Object[] args) {
-        log("SSLPinning.bypass", "setDefaultHostnameVerifier replaced");
+        log(Obf.s("SSLPinning.bypass"), "setDefaultHostnameVerifier replaced");
         Object trustAll = buildTrustAllVerifier(args[0]);
         if (backupSetDefaultHostnameVerifier != null)
             safeInvokeObject(backupSetDefaultHostnameVerifier, null,
@@ -2159,10 +2159,10 @@ public class HookerBridge {
         try {
             int type    = (Integer) sensor.getClass().getMethod("getType").invoke(sensor);
             String name = (String)  sensor.getClass().getMethod("getName").invoke(sensor);
-            log("SensorManager.registerListener",
+            log(Obf.s("SensorManager.registerListener"),
                 type + "(" + sensorTypeName(type) + ")/" + name + " rate=" + rate);
         } catch (Exception e) {
-            log("SensorManager.registerListener", "?");
+            log(Obf.s("SensorManager.registerListener"), "?");
         }
     }
 
@@ -2203,7 +2203,7 @@ public class HookerBridge {
     // Activity.requestPermissions(String[] perms, int requestCode)  instance: args={thiz, perms, code}
     public Object hookRequestPermissions(Object[] args) {
         try { logPermission("Activity.requestPermissions", (Object[]) args[1]); }
-        catch (Exception e) { log("Activity.requestPermissions", "?"); }
+        catch (Exception e) { log(Obf.s("Activity.requestPermissions"), "?"); }
         if (backupRequestPermissions != null)
             safeInvokeObject(backupRequestPermissions, args[0], args[1], args[2]);
         return null;
@@ -2212,7 +2212,7 @@ public class HookerBridge {
     // ActivityCompat.requestPermissions(Activity, String[], int)  static: args={activity, perms, code}
     public Object hookActivityCompatRequestPermissions(Object[] args) {
         try { logPermission("ActivityCompat.requestPermissions", (Object[]) args[1]); }
-        catch (Exception e) { log("ActivityCompat.requestPermissions", "?"); }
+        catch (Exception e) { log(Obf.s("ActivityCompat.requestPermissions"), "?"); }
         if (backupActivityCompatRequestPermissions != null)
             safeInvokeObject(backupActivityCompatRequestPermissions, null, args[0], args[1], args[2]);
         return null;
@@ -2222,7 +2222,7 @@ public class HookerBridge {
     // androidx headless-Fragment path used by permission libraries (XXPermissions/PermissionX).
     public Object hookFragmentRequestPermissions(Object[] args) {
         try { logPermission("Fragment.requestPermissions", (Object[]) args[1]); }
-        catch (Exception e) { log("Fragment.requestPermissions", "?"); }
+        catch (Exception e) { log(Obf.s("Fragment.requestPermissions"), "?"); }
         if (backupFragmentRequestPermissions != null)
             safeInvokeObject(backupFragmentRequestPermissions, args[0], args[1], args[2]);
         return null;
@@ -2232,7 +2232,7 @@ public class HookerBridge {
     // Framework (deprecated) Fragment; emits the same "Fragment.requestPermissions" key.
     public Object hookFrameworkFragmentRequestPermissions(Object[] args) {
         try { logPermission("Fragment.requestPermissions", (Object[]) args[1]); }
-        catch (Exception e) { log("Fragment.requestPermissions", "?"); }
+        catch (Exception e) { log(Obf.s("Fragment.requestPermissions"), "?"); }
         if (backupFrameworkFragmentRequestPermissions != null)
             safeInvokeObject(backupFrameworkFragmentRequestPermissions, args[0], args[1], args[2]);
         return null;
@@ -2286,7 +2286,7 @@ public class HookerBridge {
 
     // PackageInstaller.Session.commit(IntentSender)  instance: args={thiz, statusReceiver}
     public Object hookPackageInstallerCommit(Object[] args) {
-        log("PackageInstaller.Session.commit", "");
+        log(Obf.s("PackageInstaller.Session.commit"), "");
         if (backupPackageInstallerCommit != null)
             safeInvokeObject(backupPackageInstallerCommit, args[0], args[1]);
         return null;
@@ -2299,7 +2299,7 @@ public class HookerBridge {
         Object loc = backupGetCellLocation != null
                 ? safeInvokeObject(backupGetCellLocation, args[0])
                 : null;
-        log("TelephonyManager.getCellLocation", loc != null ? loc.toString() : "null");
+        log(Obf.s("TelephonyManager.getCellLocation"), loc != null ? loc.toString() : "null");
         return loc;
     }
 
@@ -2308,21 +2308,21 @@ public class HookerBridge {
         Object list = backupGetAllCellInfo != null
                 ? safeInvokeObject(backupGetAllCellInfo, args[0])
                 : null;
-        log("TelephonyManager.getAllCellInfo", list != null ? "count=" + getListSize(list) : "null");
+        log(Obf.s("TelephonyManager.getAllCellInfo"), list != null ? "count=" + getListSize(list) : "null");
         return list;
     }
 
     // TelephonyManager.getNetworkOperator()  instance: args={thiz}
     public Object hookGetNetworkOperator(Object[] args) {
         String v = backupGetNetworkOperator != null ? safeInvoke(backupGetNetworkOperator, args[0]) : null;
-        log("TelephonyManager.getNetworkOperator", v != null ? v : "");
+        log(Obf.s("TelephonyManager.getNetworkOperator"), v != null ? v : "");
         return v;
     }
 
     // TelephonyManager.getNetworkOperatorName()  instance: args={thiz}
     public Object hookGetNetworkOperatorName(Object[] args) {
         String v = backupGetNetworkOperatorName != null ? safeInvoke(backupGetNetworkOperatorName, args[0]) : null;
-        log("TelephonyManager.getNetworkOperatorName", v != null ? v : "");
+        log(Obf.s("TelephonyManager.getNetworkOperatorName"), v != null ? v : "");
         return v;
     }
 
@@ -2331,7 +2331,7 @@ public class HookerBridge {
         Object list = backupGetInstalledPackages != null
                 ? safeInvokeObject(backupGetInstalledPackages, args[0], args[1])
                 : null;
-        log("PackageManager.getInstalledPackages", list != null ? "count=" + getListSize(list) : "null");
+        log(Obf.s("PackageManager.getInstalledPackages"), list != null ? "count=" + getListSize(list) : "null");
         return list;
     }
 
@@ -2340,7 +2340,7 @@ public class HookerBridge {
         Object list = backupGetInstalledApplications != null
                 ? safeInvokeObject(backupGetInstalledApplications, args[0], args[1])
                 : null;
-        log("PackageManager.getInstalledApplications", list != null ? "count=" + getListSize(list) : "null");
+        log(Obf.s("PackageManager.getInstalledApplications"), list != null ? "count=" + getListSize(list) : "null");
         return list;
     }
 
@@ -2349,7 +2349,7 @@ public class HookerBridge {
         Object list = backupGetRunningTasks != null
                 ? safeInvokeObject(backupGetRunningTasks, args[0], args[1])
                 : null;
-        log("ActivityManager.getRunningTasks", list != null ? "count=" + getListSize(list) : "null");
+        log(Obf.s("ActivityManager.getRunningTasks"), list != null ? "count=" + getListSize(list) : "null");
         return list;
     }
     // ActivityManager.getRunningServices(int)  args={thiz, maxNum}. API26+ 只返回调用者自身服务。
@@ -2357,7 +2357,7 @@ public class HookerBridge {
         Object list = backupGetRunningServices != null
                 ? safeInvokeObject(backupGetRunningServices, args[0], args[1])
                 : null;
-        log("ActivityManager.getRunningServices", list != null ? "count=" + getListSize(list) : "null");
+        log(Obf.s("ActivityManager.getRunningServices"), list != null ? "count=" + getListSize(list) : "null");
         return list;
     }
 
@@ -2368,13 +2368,13 @@ public class HookerBridge {
         Object list = backupGetRecentTasks != null
                 ? safeInvokeObject(backupGetRecentTasks, args[0], args[1], args[2])
                 : null;
-        log("ActivityManager.getRecentTasks", list != null ? "count=" + getListSize(list) : "null");
+        log(Obf.s("ActivityManager.getRecentTasks"), list != null ? "count=" + getListSize(list) : "null");
         return list;
     }
 
     // BluetoothAdapter.startDiscovery() → boolean  instance: args={thiz}. 扫描周边蓝牙设备(可用于定位)。
     public Object hookBluetoothStartDiscovery(Object[] args) {
-        log("BluetoothAdapter.startDiscovery", "");
+        log(Obf.s("BluetoothAdapter.startDiscovery"), "");
         Object r = backupBluetoothStartDiscovery != null
                 ? safeInvokeObject(backupBluetoothStartDiscovery, args[0]) : null;
         return r != null ? r : Boolean.FALSE;
@@ -2384,20 +2384,20 @@ public class HookerBridge {
     public Object hookBluetoothGetBondedDevices(Object[] args) {
         Object v = backupBluetoothGetBondedDevices != null
                 ? safeInvokeObject(backupBluetoothGetBondedDevices, args[0]) : null;
-        log("BluetoothAdapter.getBondedDevices", v != null ? "count=" + getListSize(v) : "null");
+        log(Obf.s("BluetoothAdapter.getBondedDevices"), v != null ? "count=" + getListSize(v) : "null");
         return v;
     }
 
     // BluetoothLeScanner.startScan(ScanCallback) → void  instance: args={thiz, callback}. BLE 低功耗扫描。
     public Object hookBleStartScan(Object[] args) {
-        log("BluetoothLeScanner.startScan", "");
+        log(Obf.s("BluetoothLeScanner.startScan"), "");
         if (backupBleStartScan != null) safeInvokeObject(backupBleStartScan, args[0], args[1]);
         return null;
     }
 
     // BluetoothLeScanner.startScan(List<ScanFilter>, ScanSettings, ScanCallback) → void  现代带过滤重载，同 key。
     public Object hookBleStartScanFilters(Object[] args) {
-        log("BluetoothLeScanner.startScan", "");
+        log(Obf.s("BluetoothLeScanner.startScan"), "");
         if (backupBleStartScanFilters != null)
             safeInvokeObject(backupBleStartScanFilters, args[0], args[1], args[2], args[3]);
         return null;
@@ -2408,7 +2408,7 @@ public class HookerBridge {
     public Object hookWifiGetConfiguredNetworks(Object[] args) {
         Object v = backupWifiGetConfiguredNetworks != null
                 ? safeInvokeObject(backupWifiGetConfiguredNetworks, args[0]) : null;
-        log("WifiManager.getConfiguredNetworks", v != null ? "count=" + getListSize(v) : "null");
+        log(Obf.s("WifiManager.getConfiguredNetworks"), v != null ? "count=" + getListSize(v) : "null");
         return v;
     }
 
@@ -2417,7 +2417,7 @@ public class HookerBridge {
     public Object hookGetActiveSubscriptionInfoList(Object[] args) {
         Object v = backupGetActiveSubscriptionInfoList != null
                 ? safeInvokeObject(backupGetActiveSubscriptionInfoList, args[0]) : null;
-        log("SubscriptionManager.getActiveSubscriptionInfoList", v != null ? "count=" + getListSize(v) : "null");
+        log(Obf.s("SubscriptionManager.getActiveSubscriptionInfoList"), v != null ? "count=" + getListSize(v) : "null");
         return v;
     }
 
@@ -2426,7 +2426,7 @@ public class HookerBridge {
     // instance: args={thiz, name, w, h, dpi, flags, surface, callback, handler}
     public Object hookCreateVirtualDisplay(Object[] args) {
         String name = args.length > 1 && args[1] != null ? args[1].toString() : "";
-        log("MediaProjection.createVirtualDisplay", name);
+        log(Obf.s("MediaProjection.createVirtualDisplay"), name);
         return backupCreateVirtualDisplay != null
                 ? safeInvokeObject(backupCreateVirtualDisplay, args[0], args[1], args[2], args[3],
                         args[4], args[5], args[6], args[7], args[8])
@@ -2436,7 +2436,7 @@ public class HookerBridge {
     // MediaProjectionManager.createScreenCaptureIntent() → Intent  instance: args={thiz}
     // 申请截屏/录屏授权(用户consent弹窗的请求)；按"申请→permissions"原则归 permissions，data=录屏截屏。
     public Object hookCreateScreenCaptureIntent(Object[] args) {
-        log("MediaProjectionManager.createScreenCaptureIntent", "录屏截屏");
+        log(Obf.s("MediaProjectionManager.createScreenCaptureIntent"), "录屏截屏");
         return backupCreateScreenCaptureIntent != null
                 ? safeInvokeObject(backupCreateScreenCaptureIntent, args[0]) : null;
     }
@@ -2445,7 +2445,7 @@ public class HookerBridge {
     // 主动抓当前屏幕控件树(无障碍越界读屏，含他应用文本)；基类具体方法、子类继承。
     // 可被循环调用→限频由 agent dedupFlags(accessibility) 500ms 兜。
     public Object hookGetRootInActiveWindow(Object[] args) {
-        log("AccessibilityService.getRootInActiveWindow", "");
+        log(Obf.s("AccessibilityService.getRootInActiveWindow"), "");
         return backupGetRootInActiveWindow != null
                 ? safeInvokeObject(backupGetRootInActiveWindow, args[0]) : null;
     }
@@ -2454,7 +2454,7 @@ public class HookerBridge {
     // 被动事件流取数点(具体方法，替代难挂的抽象 onAccessibilityEvent)。
     // 只监测"有提取事件文本"这一动作、不取文本内容(避免记录密码等敏感输入)；高频→agent dedupFlags(accessibility) 500ms 限频。
     public Object hookAccessibilityEventGetText(Object[] args) {
-        log("AccessibilityEvent.getText", "");
+        log(Obf.s("AccessibilityEvent.getText"), "");
         return backupAccessibilityEventGetText != null
                 ? safeInvokeObject(backupAccessibilityEventGetText, args[0]) : null;
     }
@@ -2462,14 +2462,14 @@ public class HookerBridge {
     // WifiInfo.getSSID()  instance: args={thiz}
     public Object hookWifiGetSSID(Object[] args) {
         String v = backupWifiGetSSID != null ? safeInvoke(backupWifiGetSSID, args[0]) : null;
-        log("WifiInfo.getSSID", v != null ? v : "");
+        log(Obf.s("WifiInfo.getSSID"), v != null ? v : "");
         return v;
     }
 
     // WifiInfo.getBSSID()  instance: args={thiz}
     public Object hookWifiGetBSSID(Object[] args) {
         String v = backupWifiGetBSSID != null ? safeInvoke(backupWifiGetBSSID, args[0]) : null;
-        log("WifiInfo.getBSSID", v != null ? v : "");
+        log(Obf.s("WifiInfo.getBSSID"), v != null ? v : "");
         return v;
     }
 
@@ -2486,7 +2486,7 @@ public class HookerBridge {
             if (backupSendBroadcast != null) safeInvokeObject(backupSendBroadcast, args[0], args[1]);
             return null;
         }
-        log("Context.sendBroadcast", action != null ? action : "");
+        log(Obf.s("Context.sendBroadcast"), action != null ? action : "");
         if (backupSendBroadcast != null)
             safeInvokeObject(backupSendBroadcast, args[0], args[1]);
         return null;
@@ -2500,7 +2500,7 @@ public class HookerBridge {
             catch (Exception ignored) {}
             if (action == null) action = args[1].toString();
         }
-        log("Context.sendBroadcast", action != null ? action : "");
+        log(Obf.s("Context.sendBroadcast"), action != null ? action : "");
         if (backupSendOrderedBroadcast != null)
             safeInvokeObject(backupSendOrderedBroadcast, args[0], args[1], args[2]);
         return null;
@@ -2515,7 +2515,7 @@ public class HookerBridge {
         String targetPkg = getIntentPackage(intent);
         String currentPkg = getCurrentPackage(args[0]);
         if (targetPkg != null && !targetPkg.isEmpty() && !targetPkg.equals(currentPkg))
-            log("Context.startService", targetPkg);
+            log(Obf.s("Context.startService"), targetPkg);
         return backupContextStartService != null
                 ? safeInvokeObject(backupContextStartService, args[0], args[1])
                 : null;
@@ -2529,7 +2529,7 @@ public class HookerBridge {
         String targetPkg = getIntentPackage(intent);
         String currentPkg = getCurrentPackage(args[0]);
         if (targetPkg != null && !targetPkg.isEmpty() && !targetPkg.equals(currentPkg))
-            log("Context.bindService", targetPkg);
+            log(Obf.s("Context.bindService"), targetPkg);
         Object r = backupContextBindService != null
                 ? safeInvokeObject(backupContextBindService, args[0], args[1], args[2], args[3])
                 : null;
@@ -2539,7 +2539,7 @@ public class HookerBridge {
     // JobSchedulerImpl.schedule(JobInfo) → int  instance: args={thiz, jobInfo}
     // Scheduling a (often persisted) job is a self-wake / 自启动 vector; low-frequency, report all.
     public Object hookJobSchedulerSchedule(Object[] args) {
-        log("JobScheduler.schedule", "");
+        log(Obf.s("JobScheduler.schedule"), "");
         Object r = backupJobSchedulerSchedule != null
                 ? safeInvokeObject(backupJobSchedulerSchedule, args[0], args[1])
                 : null;
@@ -2555,7 +2555,7 @@ public class HookerBridge {
             catch (Exception e) { Log.e(TAG, "backup checkPermission failed: " + e); }
         }
         if (result == null || result != 0)
-            log("Context.checkPermission", perm);
+            log(Obf.s("Context.checkPermission"), perm);
         return result != null ? result : -1;
     }
 
@@ -2575,7 +2575,7 @@ public class HookerBridge {
                 return result != null ? result : -1;
             }
         }
-        log("ContextCompat.checkSelfPermission", perm);
+        log(Obf.s("ContextCompat.checkSelfPermission"), perm);
         return result != null ? result : -1;
     }
 
@@ -2585,7 +2585,7 @@ public class HookerBridge {
     // Context.checkPermission). Distinct config key "PackageManager.checkPermission".
     public Object hookPackageManagerCheckPermission(Object[] args) {
         String perm = args[1] != null ? args[1].toString() : "";
-        log("PackageManager.checkPermission", perm);
+        log(Obf.s("PackageManager.checkPermission"), perm);
         if (backupPackageManagerCheckPermission != null) {
             try { return backupPackageManagerCheckPermission.invoke(args[0], args[1], args[2]); }
             catch (Exception e) { Log.e(TAG, "backup PackageManager.checkPermission failed: " + e); }
@@ -2598,7 +2598,7 @@ public class HookerBridge {
     // result resolves asynchronously via the Continuation — we only need to detect the CALL, so
     // report on entry and pass through. App-bundled AndroidX lib (use_app_cl); Android 14+.
     public Object hookHealthConnectReadRecords(Object[] args) {
-        log("HealthConnect.readRecords", "");
+        log(Obf.s("HealthConnect.readRecords"), "");
         if (backupHealthConnectReadRecords != null)
             return safeInvokeObject(backupHealthConnectReadRecords, args[0], args[1], args[2]);
         return null;
@@ -2611,13 +2611,13 @@ public class HookerBridge {
                 ? safeInvokeObject(backupGetSystemService, args[0], args[1])
                 : null;
         if (args[1] != null && "media_projection".equals(args[1].toString()))
-            log("getSystemService_media_projection", "");
+            log(Obf.s("getSystemService_media_projection"), "");
         return result;
     }
 
     // Baidu LocationClient.start()  instance: args={thiz}
     public Object hookBaiduLocationStart(Object[] args) {
-        log("LocationClient.start", "baidu");
+        log(Obf.s("LocationClient.start"), "baidu");
         if (backupBaiduLocationStart != null)
             safeInvokeObject(backupBaiduLocationStart, args[0]);
         return null;
@@ -2625,7 +2625,7 @@ public class HookerBridge {
 
     // AMapLocationClient.startLocation()  instance: args={thiz}
     public Object hookAmapLocationStart(Object[] args) {
-        log("AMapLocationClient.startLocation", "amap");
+        log(Obf.s("AMapLocationClient.startLocation"), "amap");
         if (backupAmapLocationStart != null)
             safeInvokeObject(backupAmapLocationStart, args[0]);
         return null;
@@ -2654,7 +2654,7 @@ public class HookerBridge {
     // half-constructed stream with a null FileDescriptor.
     public Object hookFileInputStreamStr(Object[] args) throws Throwable {
         String path = args[1] != null ? args[1].toString() : "";
-        if (isExternalStorage(path)) log("FileInputStream.read", path);
+        if (isExternalStorage(path)) log(Obf.s("FileInputStream.read"), path);
         if (backupFileInputStreamStr != null)
             invokeCtorOrRethrow(backupFileInputStreamStr, args[0], args[1]);
         return null;
@@ -2663,7 +2663,7 @@ public class HookerBridge {
     // FileInputStream(File file)  instance: args={thiz, file}
     public Object hookFileInputStreamFile(Object[] args) throws Throwable {
         String path = fileArgToPath(args[1]);
-        if (isExternalStorage(path)) log("FileInputStream.read", path);
+        if (isExternalStorage(path)) log(Obf.s("FileInputStream.read"), path);
         if (backupFileInputStreamFile != null)
             invokeCtorOrRethrow(backupFileInputStreamFile, args[0], args[1]);
         return null;
@@ -2672,7 +2672,7 @@ public class HookerBridge {
     // FileOutputStream(String path)  instance: args={thiz, path}
     public Object hookFileOutputStreamStr(Object[] args) throws Throwable {
         String path = args[1] != null ? args[1].toString() : "";
-        if (isExternalStorage(path)) log("FileOutputStream.write", path);
+        if (isExternalStorage(path)) log(Obf.s("FileOutputStream.write"), path);
         if (backupFileOutputStreamStr != null)
             invokeCtorOrRethrow(backupFileOutputStreamStr, args[0], args[1]);
         return null;
@@ -2681,7 +2681,7 @@ public class HookerBridge {
     // FileOutputStream(String path, boolean append)  instance: args={thiz, path, append}
     public Object hookFileOutputStreamStrAppend(Object[] args) throws Throwable {
         String path = args[1] != null ? args[1].toString() : "";
-        if (isExternalStorage(path)) log("FileOutputStream.write", path);
+        if (isExternalStorage(path)) log(Obf.s("FileOutputStream.write"), path);
         if (backupFileOutputStreamStrAppend != null)
             invokeCtorOrRethrow(backupFileOutputStreamStrAppend, args[0], args[1], args[2]);
         return null;
@@ -2690,7 +2690,7 @@ public class HookerBridge {
     // FileOutputStream(File file)  instance: args={thiz, file}
     public Object hookFileOutputStreamFile(Object[] args) throws Throwable {
         String path = fileArgToPath(args[1]);
-        if (isExternalStorage(path)) log("FileOutputStream.write", path);
+        if (isExternalStorage(path)) log(Obf.s("FileOutputStream.write"), path);
         if (backupFileOutputStreamFile != null)
             invokeCtorOrRethrow(backupFileOutputStreamFile, args[0], args[1]);
         return null;
@@ -2699,7 +2699,7 @@ public class HookerBridge {
     // FileOutputStream(File file, boolean append)  instance: args={thiz, file, append}
     public Object hookFileOutputStreamFileAppend(Object[] args) throws Throwable {
         String path = fileArgToPath(args[1]);
-        if (isExternalStorage(path)) log("FileOutputStream.write", path);
+        if (isExternalStorage(path)) log(Obf.s("FileOutputStream.write"), path);
         if (backupFileOutputStreamFileAppend != null)
             invokeCtorOrRethrow(backupFileOutputStreamFileAppend, args[0], args[1], args[2]);
         return null;
@@ -2707,7 +2707,7 @@ public class HookerBridge {
 
     // TencentLocationManager.requestLocationUpdates()  instance: args={thiz, request, listener}
     public Object hookTencentLocationStart(Object[] args) {
-        log("TencentLocationManager.requestLocationUpdates", "tencent");
+        log(Obf.s("TencentLocationManager.requestLocationUpdates"), "tencent");
         if (backupTencentLocationStart != null)
             safeInvokeObject(backupTencentLocationStart, args[0], args[1], args[2]);
         return null;

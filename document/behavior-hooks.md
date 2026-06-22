@@ -109,6 +109,28 @@
 
 ---
 
+## 分类八：界面文字采集（ui_text）
+
+与上述 behavior hook 不同，本项不挂某个 API，而是借 `Activity.onCreate`（分类一 #8）作触发器，在页面布局完成后扫描**当前进程全部窗口**的可见文字并整页上报，供**服务端**比对 `dim_ui_keyword`（敏感个人信息字段名）。payload 侧只采集、不匹配、不打 flag。
+
+- **日志格式**：`{"type":"ui_text","activity":"<Activity类名>","text":"<行1>\n<行2>...","timestamp":<ms>}`，tag = `payload`。
+- **触发 / 去重**：每次 `Activity.onCreate` 后延迟 `UI_TEXT_SCAN_DELAY_MS`（默认 1000ms）单次扫描；仅主进程（子进程跳过）；按 `activity+内容hash` 去重，同页同内容每进程只发一次。
+- **文本来源**：
+  - 原生视图：`WindowManagerGlobal.mViews` 全窗口根 → 递归取 `TextView.getText()` / `View.getContentDescription()`（含本进程的 Dialog/Popup，不含系统弹窗及其它进程）。
+  - WebView：反射「鸭子类型」——对声明了 `evaluateJavascript(String, <ValueCallback>)` 的 View，动态 `Proxy` 其回调读 `document.body.innerText`，**一套覆盖** `android.webkit.WebView` / X5 `com.tencent.smtt.sdk.WebView` / xweb `com.tencent.xweb.WebView`；异步回调各自补发一条 `ui_text`。**不新增任何 lsplant hook**（纯反射调用），对注入成功率无影响。
+- **编译期开关**（`HookerBridge.java`，编译前启/关；关闭则该路径为死代码、零开销、无 @pecker 流量）：
+
+| 开关 | 作用 |
+|------|------|
+| `UI_TEXT_ENABLED` | 整个 ui_text 采集总闸 |
+| `WEBVIEW_TEXT_ENABLED` | 仅 WebView/X5/xweb 抽取，可独立关闭、保留原生文本 |
+
+- **相关方法**：`scheduleUiTextScan` / `scanUiTextOnce` / `collectUiText` / `looksLikeWebView` / `extractWebViewText` / `unquoteJsString` / `emitUiText`。
+- **后端链路**：pecker-agent 收到 `ui_text` → 原样 `POST /external/data/uiText`（不匹配、不打 flag）→ 后端比对 `dim_ui_keyword`。
+- **已知盲区**：系统权限弹窗 / 其它进程窗口（纯进程内采集看不到）；JS 关闭或跨域 iframe 的 WebView 取不全。
+
+---
+
 ## 传感器类型编号映射
 
 | 编号 | 常量名 | 说明 |

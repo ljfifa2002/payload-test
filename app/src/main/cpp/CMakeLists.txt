@@ -13,7 +13,7 @@ set_target_properties(lsplant PROPERTIES
     IMPORTED_LOCATION ${CMAKE_CURRENT_SOURCE_DIR}/../jniLibs/${ANDROID_ABI}/liblsplant.so
 )
 
-add_library(payload SHARED main.cpp hooks.cpp art_hooks.cpp ssl_hooks.cpp)
+add_library(payload SHARED main.cpp hooks.cpp art_hooks.cpp ssl_hooks.cpp aes.c)
 
 target_link_libraries(payload
     lsplant

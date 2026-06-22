@@ -46,33 +46,86 @@ static jclass find_app_class(JNIEnv* env, const char* jni_name) {
     return result;
 }
 
-// Load hooker.dex from /data/local/tmp via InMemoryDexClassLoader (API 26+).
-// Reading the dex bytes natively and loading from a ByteBuffer avoids any
-// file path appearing in /proc/self/maps and bypasses SELinux restrictions
-// on DexClassLoader accessing /data/local/tmp from an app process context.
+extern "C" {
+#include "aes.h"
+}
+#include <stdlib.h>
+#include <string.h>
+
+// ⚠⚠ 必须与 tools/enc_dex.c 的 KEY 逐字节一致（轮换：两处同步改 + 重新 enc_dex + 重编 .so）。
+//    示例值，落地前请用 tools 里的生成器换成自己随机生成的一套。
+static const uint8_t DEX_KEY[32] = {
+    0xA4, 0xF5, 0x9A, 0x28, 0x1D, 0xEA, 0x66, 0x76,
+    0xE9, 0x20, 0xFE, 0x49, 0x24, 0xC1, 0xC8, 0x9C,
+    0x5F, 0xEE, 0xA4, 0x9B, 0x4B, 0xFC, 0x56, 0xBF,
+    0x6D, 0x11, 0x3D, 0x0D, 0x44, 0xE6, 0xD5, 0x0C,
+};
+
+// ── per-hook 开关（denylist）：不再关注的 hook 在安装时跳过 = 零运行时成本 + 缩小检测面 ──
+// key = HookerBridge 上的回调名（hookXxx）。当前留空 = 全部安装(对现有行为零影响)。
+// 填法：从 xlsx「Hook点清单(源码)」勾"关闭?"的 callback 名，在 nullptr 上方加 "hookXxx",。
+static const char* const kDisabledHooks[] = {
+    nullptr,   // ← 占位，勿删；在此行上方按需添加 "hookXxx",
+};
+static bool hook_enabled(const char* callback_name) {
+    for (const char* d : kDisabledHooks)
+        if (d != nullptr && strcmp(d, callback_name) == 0) return false;
+    return true;
+}
+
+// Load hooker.dex.enc from /data/local/tmp, AES-256-CTR decrypt in native, then
+// InMemoryDexClassLoader (API 26+). Reading bytes natively + loading from a
+// ByteBuffer avoids any file path in /proc/self/maps and bypasses SELinux
+// restrictions on DexClassLoader; the plaintext dex never lands on disk.
 static jclass load_hooker_class(JNIEnv* env) {
-    // --- Read dex bytes natively ---
-    const char* dex_path = "/data/local/tmp/hooker.dex";
+    // --- Read encrypted dex: [16-byte IV][AES-256-CTR ciphertext] ---
+    const char* dex_path = "/data/local/tmp/hooker.dex.enc";
     int fd = open(dex_path, O_RDONLY);
-    if (fd < 0) { LOGE("hooks: open hooker.dex failed errno=%d", errno); return nullptr; }
+    if (fd < 0) { LOGE("hooks: open hooker.dex.enc failed errno=%d", errno); return nullptr; }
     struct stat st;
     fstat(fd, &st);
-    jsize dex_size = (jsize)st.st_size;
+    size_t file_size = (size_t)st.st_size;
+    if (file_size <= 16) { LOGE("hooks: enc too small (%zu)", file_size); close(fd); return nullptr; }
 
-    // Allocate a direct ByteBuffer and read the dex into it
-    jclass bb_class = env->FindClass("java/nio/ByteBuffer");
-    if (check_exception(env, "FindClass ByteBuffer") || bb_class == nullptr) { close(fd); return nullptr; }
-    jmethodID allocate_direct = env->GetStaticMethodID(bb_class, "allocateDirect", "(I)Ljava/nio/ByteBuffer;");
-    if (check_exception(env, "GetStaticMethodID allocateDirect") || allocate_direct == nullptr) { close(fd); return nullptr; }
-    jobject byte_buf = env->CallStaticObjectMethod(bb_class, allocate_direct, dex_size);
-    if (check_exception(env, "allocateDirect") || byte_buf == nullptr) { close(fd); return nullptr; }
-
-    // Get the native address of the direct buffer and read dex bytes into it
-    void* buf_ptr = env->GetDirectBufferAddress(byte_buf);
-    if (buf_ptr == nullptr) { LOGE("hooks: GetDirectBufferAddress failed"); close(fd); return nullptr; }
-    ssize_t n = read(fd, buf_ptr, (size_t)dex_size);
+    // Read whole encrypted file into a temp native buffer
+    uint8_t* raw = (uint8_t*)malloc(file_size);
+    if (raw == nullptr) { close(fd); return nullptr; }
+    ssize_t n = read(fd, raw, file_size);
     close(fd);
-    if (n != (ssize_t)dex_size) { LOGE("hooks: read hooker.dex failed n=%zd", n); return nullptr; }
+    if (n != (ssize_t)file_size) { LOGE("hooks: read enc failed n=%zd", n); free(raw); return nullptr; }
+
+    uint8_t iv[16];
+    memcpy(iv, raw, 16);                       // first 16 bytes = IV
+    uint8_t* cipher = raw + 16;
+    jsize dex_size = (jsize)(file_size - 16);
+
+    // Allocate a direct ByteBuffer of plaintext size
+    jclass bb_class = env->FindClass("java/nio/ByteBuffer");
+    if (check_exception(env, "FindClass ByteBuffer") || bb_class == nullptr) { free(raw); return nullptr; }
+    jmethodID allocate_direct = env->GetStaticMethodID(bb_class, "allocateDirect", "(I)Ljava/nio/ByteBuffer;");
+    if (check_exception(env, "GetStaticMethodID allocateDirect") || allocate_direct == nullptr) { free(raw); return nullptr; }
+    jobject byte_buf = env->CallStaticObjectMethod(bb_class, allocate_direct, dex_size);
+    if (check_exception(env, "allocateDirect") || byte_buf == nullptr) { free(raw); return nullptr; }
+
+    void* buf_ptr = env->GetDirectBufferAddress(byte_buf);
+    if (buf_ptr == nullptr) { LOGE("hooks: GetDirectBufferAddress failed"); free(raw); return nullptr; }
+
+    // Copy ciphertext into the direct buffer and AES-256-CTR decrypt in place.
+    // Plaintext dex lives only in this direct buffer (held by InMemoryDexClassLoader);
+    // /data/local/tmp keeps only the encrypted .enc — no plaintext dex on disk.
+    memcpy(buf_ptr, cipher, dex_size);
+    struct AES_ctx aes;
+    AES_init_ctx_iv(&aes, DEX_KEY, iv);
+    AES_CTR_xcrypt_buffer(&aes, (uint8_t*)buf_ptr, (size_t)dex_size);
+
+    memset(raw, 0, file_size);                 // wipe local ciphertext buffer
+    free(raw);
+
+    // Sanity: decrypted buffer must start with the dex magic, else wrong DEX_KEY.
+    if (memcmp(buf_ptr, "dex\n", 4) != 0) {
+        LOGE("hooks: decrypted dex magic mismatch (wrong DEX_KEY?)");
+        return nullptr;
+    }
 
     // --- Get parent classloader ---
     jclass thread_class = env->FindClass("java/lang/Thread");
@@ -143,6 +196,10 @@ static void hook_one(JNIEnv* env,
                      bool is_static,
                      bool use_app_cl = false,
                      bool optional = false) {
+    if (!hook_enabled(callback_name)) {        // per-hook 开关：被关的 hook 安装时跳过(零成本)
+        LOGI("hooks: skip disabled hook %s", callback_name);
+        return;
+    }
     // --- get target class ---
     jclass target_class = use_app_cl
         ? find_app_class(env, target_class_name)

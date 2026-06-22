@@ -2,6 +2,11 @@ plugins {
     alias(libs.plugins.android.library)
 }
 
+// NOTE: hooker.dex string encoding is NOT done here. hooker.dex is built in CI
+// with javac + d8 directly (see .github/workflows/build.yml), bypassing AGP, so
+// the AGP instrumentation API can't reach it. The Obf.s("...") literals are
+// encoded by tools/ObfTransform.java, run on the javac output before d8.
+
 android {
     namespace = "com.pecker.payload"
     compileSdk = 35

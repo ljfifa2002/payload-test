@@ -14,3 +14,6 @@ local.properties
 # macOS
 .DS_Store
 build_number.txt
+
+# Obfuscation key output (contains real keys — never commit)
+tools/obf-key-output.txt
