@@ -595,18 +595,27 @@ public class HookerBridge {
             new java.util.concurrent.atomic.AtomicBoolean(false);
 
     /**
-     * PoC v2 (verify-only): enumerate ALL classes DEFINED in the dex files reachable
+     * PoC v3 (verify-only): enumerate ALL classes DEFINED in the dex files reachable
      * from {@code cl} via BaseDexClassLoader.pathList → dexElements[].dexFile →
-     * DexFile.entries(). v1 proved entries() works without any hidden-API exemption
-     * (greylist, conditionally allowed). v2 answers the two open questions:
-     *   Q1: are real third-party SDK classes present (not just the shell's own)?
-     *   Q2: after collapsing to a package prefix, how many distinct packages remain
-     *       (i.e. what the reportable volume looks like vs the raw 320k)?
+     * DexFile.entries(). v1 proved entries() works without hidden-API exemption; v2
+     * proved third-party SDK classes are present. v3 measures the ACTUAL reportable
+     * volume under the production dedup rule so we can turn this into an uploader in
+     * one pass.
      *
+     * Production dedup rule (driven by backend matching = uploadedClass.contains(dictSdk),
+     * dict entries up to 7 segments deep):
+     *   - do NOT fold class names to a short prefix (would miss deep dict entries);
+     *   - dedup by FULL PACKAGE NAME (strip inner-class $ suffix, strip last segment).
+     *     Every class in one package yields the identical contains() result against
+     *     every dict entry, so ONE representative class name per package is sufficient
+     *     and lossless for matching.
+     *   - keep the representative's FULL length so deep (4-7 seg) dict entries still hit.
+     *
+     * "reportCount" below == exactly what the production uploader would send.
      * Logs ONLY. No reporting, no hooks.
      */
     private static void dumpClassesPoc(ClassLoader cl) {
-        // Known third-party SDK package prefixes to probe for presence (Q1).
+        // Known third-party SDK package prefixes to probe for presence (Q1 sanity).
         final String[] SDK_PROBES = {
             "com.umeng", "com.tratao", "com.iflytek", "com.taobao.accs",
             "com.huawei.hms", "cn.richinfo", "com.aliyun", "com.hzdata",
@@ -616,15 +625,17 @@ public class HookerBridge {
         };
         final int[] probeHits = new int[SDK_PROBES.length];
 
-        // System/noise prefixes to drop (same spirit as LC_SYS_PREFIXES + resources).
+        // System/noise prefixes to drop. NOTE: androidx.* is intentionally NOT dropped
+        // (backend dict has androidx.* SDK entries, e.g. androidx.camera=CameraX).
+        // Only true framework packages + the shell's own runtime are dropped.
         final String[] DROP = {
             "java.", "javax.", "android.", "dalvik.", "com.android.",
             "sun.", "libcore.", "kotlin.", "kotlinx.", "org.chromium.",
             "com.Proxy.", "com.Install.", "com.appsec."  // the shell itself
         };
 
-        // Q2: collapse each class to its first 3 package segments and count distinct.
-        java.util.HashSet<String> distinctPrefix = new java.util.HashSet<>();
+        // Production dedup: package name -> one representative full class name.
+        java.util.HashMap<String, String> pkgRep = new java.util.HashMap<>();
 
         int total = 0;
         int kept = 0;   // survives DROP filter
@@ -676,31 +687,33 @@ public class HookerBridge {
                     if (drop) continue;
                     kept++;
 
-                    // Q2: collapse to first 3 segments (or fewer), ignore inner classes.
+                    // Dedup key = full package name (strip inner-class, strip last segment).
                     String base = name;
                     int dollar = base.indexOf('$');
                     if (dollar >= 0) base = base.substring(0, dollar);
-                    int seg = 0, idx = 0;
-                    for (; idx < base.length() && seg < 3; idx++) {
-                        if (base.charAt(idx) == '.') seg++;
+                    int lastDot = base.lastIndexOf('.');
+                    String pkg = (lastDot > 0) ? base.substring(0, lastDot) : base;
+                    // Keep the shortest representative per package (deterministic-ish,
+                    // shorter = fewer bytes but still full-length relative to its package).
+                    String prev = pkgRep.get(pkg);
+                    if (prev == null || name.length() < prev.length()) {
+                        pkgRep.put(pkg, name);
                     }
-                    // idx now points just past the 3rd dot (or end); trim trailing char.
-                    String prefix = (seg >= 3) ? base.substring(0, idx - 1) : base;
-                    distinctPrefix.add(prefix);
                 }
             }
             Log.i(TAG, "clsdump-poc: total=" + total + " kept(after drop)=" + kept
-                    + " distinctPkgPrefixes=" + distinctPrefix.size());
+                    + " reportCount(distinctPkgs)=" + pkgRep.size());
             // Q1 result.
             StringBuilder sb = new StringBuilder("clsdump-poc: SDK-probe ");
             for (int i = 0; i < SDK_PROBES.length; i++) {
                 if (probeHits[i] > 0) sb.append(SDK_PROBES[i]).append('=').append(probeHits[i]).append(' ');
             }
             Log.i(TAG, sb.toString());
-            // Q2 sample: log up to 60 distinct prefixes so we can eyeball SDK granularity.
+            // Q2 sample: log up to 60 representative class names so we can eyeball what
+            // would actually be uploaded (full-length names, one per package).
             int c = 0;
-            for (String p : distinctPrefix) {
-                Log.i(TAG, "clsdump-poc: pkg[" + c + "] " + p);
+            for (java.util.Map.Entry<String, String> en2 : pkgRep.entrySet()) {
+                Log.i(TAG, "clsdump-poc: rep[" + c + "] " + en2.getValue());
                 if (++c >= 60) break;
             }
         } catch (Throwable t) {
