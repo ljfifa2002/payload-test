@@ -65,6 +65,10 @@ static const uint8_t DEX_KEY[32] = {
 // key = HookerBridge 上的回调名（hookXxx）。当前留空 = 全部安装(对现有行为零影响)。
 // 填法：从 xlsx「Hook点清单(源码)」勾"关闭?"的 callback 名，在 nullptr 上方加 "hookXxx",。
 static const char* const kDisabledHooks[] = {
+    "hookFileOutputStreamStr",          // writesdcard 已禁用 - 2026-07-08
+    "hookFileOutputStreamStrAppend",
+    "hookFileOutputStreamFile",
+    "hookFileOutputStreamFileAppend",
     nullptr,   // ← 占位，勿删；在此行上方按需添加 "hookXxx",
 };
 static bool hook_enabled(const char* callback_name) {

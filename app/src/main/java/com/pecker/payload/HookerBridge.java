@@ -2154,13 +2154,48 @@ public class HookerBridge {
         }
     }
 
+    private static String sensorTypeNameCN(int type) {
+        switch (type) {
+            case 1:  return "加速度传感器";
+            case 2:  return "磁场传感器";
+            case 3:  return "方向传感器";
+            case 4:  return "陀螺仪传感器";
+            case 5:  return "光线传感器";
+            case 6:  return "气压传感器";
+            case 7:  return "温度传感器";
+            case 8:  return "距离传感器";
+            case 9:  return "重力传感器";
+            case 10: return "线性加速度传感器";
+            case 11: return "旋转矢量传感器";
+            case 12: return "湿度传感器";
+            case 13: return "环境温度传感器";
+            case 14: return "未校准磁场传感器";
+            case 15: return "游戏旋转矢量传感器";
+            case 16: return "未校准陀螺仪传感器";
+            case 17: return "显著运动传感器";
+            case 18: return "步行检测传感器";
+            case 19: return "步数统计传感器";
+            case 20: return "地磁旋转矢量传感器";
+            case 21: return "心率传感器";
+            case 28: return "六自由度姿态传感器";
+            case 29: return "静止检测传感器";
+            case 30: return "运动检测传感器";
+            case 31: return "心跳传感器";
+            case 34: return "离体检测传感器";
+            case 35: return "未校准加速度传感器";
+            case 36: return "铰链角度传感器";
+            default: return "传感器类型" + type;
+        }
+    }
+
     private static void logSensor(Object sensor, int rate) {
         if (sensor == null) return;
         try {
             int type    = (Integer) sensor.getClass().getMethod("getType").invoke(sensor);
             String name = (String)  sensor.getClass().getMethod("getName").invoke(sensor);
+            String cnName = sensorTypeNameCN(type);
             log(Obf.s("SensorManager.registerListener"),
-                type + "(" + sensorTypeName(type) + ")/" + name + " rate=" + rate);
+                "(" + cnName + ")：" + type + "(" + sensorTypeName(type) + ")/" + name + " rate=" + rate);
         } catch (Exception e) {
             log(Obf.s("SensorManager.registerListener"), "?");
         }
