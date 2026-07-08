@@ -595,39 +595,40 @@ public class HookerBridge {
             new java.util.concurrent.atomic.AtomicBoolean(false);
 
     /**
-     * PoC: enumerate ALL classes DEFINED in the dex files reachable from {@code cl}
-     * (not just runtime-loaded ones), via reflection into
-     * BaseDexClassLoader.pathList → DexPathList.dexElements[].dexFile → DexFile.entries().
+     * PoC v2 (verify-only): enumerate ALL classes DEFINED in the dex files reachable
+     * from {@code cl} via BaseDexClassLoader.pathList → dexElements[].dexFile →
+     * DexFile.entries(). v1 proved entries() works without any hidden-API exemption
+     * (greylist, conditionally allowed). v2 answers the two open questions:
+     *   Q1: are real third-party SDK classes present (not just the shell's own)?
+     *   Q2: after collapsing to a package prefix, how many distinct packages remain
+     *       (i.e. what the reportable volume looks like vs the raw 320k)?
      *
-     * These are Android 9+ hidden APIs; the payload dex runs in app context and is
-     * subject to hidden-API enforcement. We first attempt a blanket exemption via
-     * VMRuntime.setHiddenApiExemptions(["L"]) (itself reached by double reflection).
-     *
-     * Logs ONLY: total classes found and the first 40 names. No reporting, no hooks.
-     * Success criterion (logcat -s payload): "clsdump-poc: total=NNNN" with NNNN large
-     * and third-party SDK internal classes present.
+     * Logs ONLY. No reporting, no hooks.
      */
     private static void dumpClassesPoc(ClassLoader cl) {
-        // Step 1 — try to exempt all hidden APIs for this process.
-        try {
-            Class<?> vmRuntimeCls = Class.forName("dalvik.system.VMRuntime");
-            Method getRuntime = vmRuntimeCls.getDeclaredMethod("getRuntime");
-            getRuntime.setAccessible(true);
-            Object vmRuntime = getRuntime.invoke(null);
-            Method setExemptions = vmRuntimeCls.getDeclaredMethod(
-                    "setHiddenApiExemptions", String[].class);
-            setExemptions.setAccessible(true);
-            setExemptions.invoke(vmRuntime, (Object) new String[]{"L"});
-            Log.i(TAG, "clsdump-poc: hidden-api exemption applied");
-        } catch (Throwable t) {
-            Log.w(TAG, "clsdump-poc: hidden-api exemption FAILED: " + t);
-            // Continue anyway — on some ROMs entries() may still work.
-        }
+        // Known third-party SDK package prefixes to probe for presence (Q1).
+        final String[] SDK_PROBES = {
+            "com.umeng", "com.tratao", "com.iflytek", "com.taobao.accs",
+            "com.huawei.hms", "cn.richinfo", "com.aliyun", "com.hzdata",
+            "com.tencent", "com.alipay", "com.sina", "com.baidu",
+            "com.google", "com.facebook", "com.bytedance", "com.amap",
+            "androidx", "com.squareup", "io.reactivex", "com.bumptech.glide"
+        };
+        final int[] probeHits = new int[SDK_PROBES.length];
+
+        // System/noise prefixes to drop (same spirit as LC_SYS_PREFIXES + resources).
+        final String[] DROP = {
+            "java.", "javax.", "android.", "dalvik.", "com.android.",
+            "sun.", "libcore.", "kotlin.", "kotlinx.", "org.chromium.",
+            "com.Proxy.", "com.Install.", "com.appsec."  // the shell itself
+        };
+
+        // Q2: collapse each class to its first 3 package segments and count distinct.
+        java.util.HashSet<String> distinctPrefix = new java.util.HashSet<>();
 
         int total = 0;
-        int logged = 0;
+        int kept = 0;   // survives DROP filter
         try {
-            // BaseDexClassLoader.pathList
             Class<?> bdcl = Class.forName("dalvik.system.BaseDexClassLoader");
             java.lang.reflect.Field fPathList = bdcl.getDeclaredField("pathList");
             fPathList.setAccessible(true);
@@ -636,7 +637,6 @@ public class HookerBridge {
                 Log.w(TAG, "clsdump-poc: pathList null for cl=" + cl.getClass().getName());
                 return;
             }
-            // DexPathList.dexElements
             java.lang.reflect.Field fElems = pathList.getClass().getDeclaredField("dexElements");
             fElems.setAccessible(true);
             Object[] elements = (Object[]) fElems.get(pathList);
@@ -646,14 +646,12 @@ public class HookerBridge {
             }
             Log.i(TAG, "clsdump-poc: dexElements count=" + elements.length
                     + " cl=" + cl.getClass().getName());
-            // Element.dexFile
             for (Object element : elements) {
                 if (element == null) continue;
                 java.lang.reflect.Field fDexFile = element.getClass().getDeclaredField("dexFile");
                 fDexFile.setAccessible(true);
                 Object dexFile = fDexFile.get(element);
                 if (dexFile == null) continue;
-                // DexFile.entries() -> Enumeration<String> of class names
                 Method entries = dexFile.getClass().getDeclaredMethod("entries");
                 entries.setAccessible(true);
                 Object en = entries.invoke(dexFile);
@@ -662,14 +660,49 @@ public class HookerBridge {
                 while (e.hasMoreElements()) {
                     Object o = e.nextElement();
                     if (!(o instanceof String)) continue;
+                    String name = (String) o;
                     total++;
-                    if (logged < 40) {
-                        Log.i(TAG, "clsdump-poc: [" + logged + "] " + o);
-                        logged++;
+
+                    // Q1: SDK presence probe.
+                    for (int i = 0; i < SDK_PROBES.length; i++) {
+                        if (name.startsWith(SDK_PROBES[i])) { probeHits[i]++; break; }
                     }
+
+                    // DROP filter.
+                    boolean drop = false;
+                    for (String p : DROP) {
+                        if (name.startsWith(p)) { drop = true; break; }
+                    }
+                    if (drop) continue;
+                    kept++;
+
+                    // Q2: collapse to first 3 segments (or fewer), ignore inner classes.
+                    String base = name;
+                    int dollar = base.indexOf('$');
+                    if (dollar >= 0) base = base.substring(0, dollar);
+                    int seg = 0, idx = 0;
+                    for (; idx < base.length() && seg < 3; idx++) {
+                        if (base.charAt(idx) == '.') seg++;
+                    }
+                    // idx now points just past the 3rd dot (or end); trim trailing char.
+                    String prefix = (seg >= 3) ? base.substring(0, idx - 1) : base;
+                    distinctPrefix.add(prefix);
                 }
             }
-            Log.i(TAG, "clsdump-poc: total=" + total);
+            Log.i(TAG, "clsdump-poc: total=" + total + " kept(after drop)=" + kept
+                    + " distinctPkgPrefixes=" + distinctPrefix.size());
+            // Q1 result.
+            StringBuilder sb = new StringBuilder("clsdump-poc: SDK-probe ");
+            for (int i = 0; i < SDK_PROBES.length; i++) {
+                if (probeHits[i] > 0) sb.append(SDK_PROBES[i]).append('=').append(probeHits[i]).append(' ');
+            }
+            Log.i(TAG, sb.toString());
+            // Q2 sample: log up to 60 distinct prefixes so we can eyeball SDK granularity.
+            int c = 0;
+            for (String p : distinctPrefix) {
+                Log.i(TAG, "clsdump-poc: pkg[" + c + "] " + p);
+                if (++c >= 60) break;
+            }
         } catch (Throwable t) {
             Log.e(TAG, "clsdump-poc: enumeration FAILED at total=" + total + " : " + t);
         }
