@@ -570,18 +570,19 @@ public class HookerBridge {
                     }
                     if (doFlush) lcFlush();
 
-                    // PoC (verify-only): the first non-system class means the shell has
-                    // decrypted and is loading real app classes. Schedule ONE delayed
-                    // full-dex enumeration of THIS ClassLoader and only log the result —
-                    // no reporting, no hooks. Validates whether DexFile.entries() works
-                    // under hidden-API restrictions before building the real feature.
+                    // Shell has decrypted and is loading real app classes. Schedule ONE
+                    // delayed full-dex enumeration of THIS ClassLoader to report every
+                    // SDK-relevant class DEFINED in the dex (superset of what the passive
+                    // loadClass hook catches — internal SDK classes resolved natively never
+                    // trigger loadClass). Reports via the same loaded_class pipeline;
+                    // _lcSeen dedup prevents overlap with the passive stream.
                     if (args[0] instanceof ClassLoader
                             && sClassDumpScheduled.compareAndSet(false, true)) {
                         final ClassLoader cl = (ClassLoader) args[0];
                         new Thread(() -> {
                             try { Thread.sleep(8000); } catch (InterruptedException ignored2) {}
-                            dumpClassesPoc(cl);
-                        }, "pecker-clsdump-poc").start();
+                            dumpAndReportClasses(cl);
+                        }, "pecker-clsdump").start();
                     }
                 }
             }
@@ -589,74 +590,62 @@ public class HookerBridge {
         return result;
     }
 
-    // ---- PoC (verify-only): full-dex class enumeration under hidden-API limits ----
+    // ---- Full-dex class enumeration: report all SDK-relevant classes in the dex ----
     // One-shot guard so the delayed dump runs a single time.
     private static final java.util.concurrent.atomic.AtomicBoolean sClassDumpScheduled =
             new java.util.concurrent.atomic.AtomicBoolean(false);
 
     /**
-     * PoC v3 (verify-only): enumerate ALL classes DEFINED in the dex files reachable
-     * from {@code cl} via BaseDexClassLoader.pathList → dexElements[].dexFile →
-     * DexFile.entries(). v1 proved entries() works without hidden-API exemption; v2
-     * proved third-party SDK classes are present. v3 measures the ACTUAL reportable
-     * volume under the production dedup rule so we can turn this into an uploader in
-     * one pass.
+     * Enumerate every class DEFINED in the dex files reachable from {@code cl} via
+     * BaseDexClassLoader.pathList → dexElements[].dexFile → DexFile.entries(), and
+     * report one representative full class name per package through the existing
+     * loaded_class pipeline.
      *
-     * Production dedup rule (driven by backend matching = uploadedClass.contains(dictSdk),
-     * dict entries up to 7 segments deep):
-     *   - do NOT fold class names to a short prefix (would miss deep dict entries);
-     *   - dedup by FULL PACKAGE NAME (strip inner-class $ suffix, strip last segment).
-     *     Every class in one package yields the identical contains() result against
-     *     every dict entry, so ONE representative class name per package is sufficient
-     *     and lossless for matching.
-     *   - keep the representative's FULL length so deep (4-7 seg) dict entries still hit.
+     * Why full-dex enumeration: the passive loadClass hook only catches classes loaded
+     * explicitly by name (Manifest components + WebView). SDK internal classes are
+     * resolved natively (ClassLinker::ResolveType) and never trigger loadClass, so they
+     * are missed — that is why the packed app matched ~20 SDKs vs Frida's 70+. entries()
+     * lists everything defined in the dex, matching Frida's coverage.
      *
-     * "reportCount" below == exactly what the production uploader would send.
-     * Logs ONLY. No reporting, no hooks.
+     * Why one representative per package (not the full 318k): backend matching is
+     * uploadedClass.contains(dictSdkName), with dict entries up to 7 segments deep.
+     * Every class in one package yields the IDENTICAL contains() result against every
+     * dict entry, so a single full-length representative per package is lossless for
+     * matching while cutting volume from ~318k to ~2.7k. We keep the representative's
+     * FULL name (never fold to a short prefix) so deep 4-7 segment dict entries still hit.
+     *
+     * Measured on com.cmi.jegotrip: 328456 total → 318288 kept → 2671 packages,
+     * enumeration ~1.1s on a background thread (no injection impact).
      */
-    private static void dumpClassesPoc(ClassLoader cl) {
-        // Known third-party SDK package prefixes to probe for presence (Q1 sanity).
-        final String[] SDK_PROBES = {
-            "com.umeng", "com.tratao", "com.iflytek", "com.taobao.accs",
-            "com.huawei.hms", "cn.richinfo", "com.aliyun", "com.hzdata",
-            "com.tencent", "com.alipay", "com.sina", "com.baidu",
-            "com.google", "com.facebook", "com.bytedance", "com.amap",
-            "androidx", "com.squareup", "io.reactivex", "com.bumptech.glide"
-        };
-        final int[] probeHits = new int[SDK_PROBES.length];
-
-        // System/noise prefixes to drop. NOTE: androidx.* is intentionally NOT dropped
+    private static void dumpAndReportClasses(ClassLoader cl) {
+        // System/noise prefixes to drop. androidx.* is intentionally NOT dropped
         // (backend dict has androidx.* SDK entries, e.g. androidx.camera=CameraX).
-        // Only true framework packages + the shell's own runtime are dropped.
         final String[] DROP = {
             "java.", "javax.", "android.", "dalvik.", "com.android.",
             "sun.", "libcore.", "kotlin.", "kotlinx.", "org.chromium.",
             "com.Proxy.", "com.Install.", "com.appsec."  // the shell itself
         };
 
-        // Production dedup: package name -> one representative full class name.
+        // Dedup by full package name -> shortest representative full class name.
         java.util.HashMap<String, String> pkgRep = new java.util.HashMap<>();
 
-        int total = 0;
-        int kept = 0;   // survives DROP filter
+        int total = 0, kept = 0;
         try {
             Class<?> bdcl = Class.forName("dalvik.system.BaseDexClassLoader");
             java.lang.reflect.Field fPathList = bdcl.getDeclaredField("pathList");
             fPathList.setAccessible(true);
             Object pathList = fPathList.get(cl);
             if (pathList == null) {
-                Log.w(TAG, "clsdump-poc: pathList null for cl=" + cl.getClass().getName());
+                Log.w(TAG, "clsdump: pathList null for cl=" + cl.getClass().getName());
                 return;
             }
             java.lang.reflect.Field fElems = pathList.getClass().getDeclaredField("dexElements");
             fElems.setAccessible(true);
             Object[] elements = (Object[]) fElems.get(pathList);
             if (elements == null) {
-                Log.w(TAG, "clsdump-poc: dexElements null");
+                Log.w(TAG, "clsdump: dexElements null");
                 return;
             }
-            Log.i(TAG, "clsdump-poc: dexElements count=" + elements.length
-                    + " cl=" + cl.getClass().getName());
             for (Object element : elements) {
                 if (element == null) continue;
                 java.lang.reflect.Field fDexFile = element.getClass().getDeclaredField("dexFile");
@@ -674,12 +663,6 @@ public class HookerBridge {
                     String name = (String) o;
                     total++;
 
-                    // Q1: SDK presence probe.
-                    for (int i = 0; i < SDK_PROBES.length; i++) {
-                        if (name.startsWith(SDK_PROBES[i])) { probeHits[i]++; break; }
-                    }
-
-                    // DROP filter.
                     boolean drop = false;
                     for (String p : DROP) {
                         if (name.startsWith(p)) { drop = true; break; }
@@ -687,38 +670,39 @@ public class HookerBridge {
                     if (drop) continue;
                     kept++;
 
-                    // Dedup key = full package name (strip inner-class, strip last segment).
                     String base = name;
                     int dollar = base.indexOf('$');
                     if (dollar >= 0) base = base.substring(0, dollar);
                     int lastDot = base.lastIndexOf('.');
                     String pkg = (lastDot > 0) ? base.substring(0, lastDot) : base;
-                    // Keep the shortest representative per package (deterministic-ish,
-                    // shorter = fewer bytes but still full-length relative to its package).
                     String prev = pkgRep.get(pkg);
                     if (prev == null || name.length() < prev.length()) {
                         pkgRep.put(pkg, name);
                     }
                 }
             }
-            Log.i(TAG, "clsdump-poc: total=" + total + " kept(after drop)=" + kept
-                    + " reportCount(distinctPkgs)=" + pkgRep.size());
-            // Q1 result.
-            StringBuilder sb = new StringBuilder("clsdump-poc: SDK-probe ");
-            for (int i = 0; i < SDK_PROBES.length; i++) {
-                if (probeHits[i] > 0) sb.append(SDK_PROBES[i]).append('=').append(probeHits[i]).append(' ');
-            }
-            Log.i(TAG, sb.toString());
-            // Q2 sample: log up to 60 representative class names so we can eyeball what
-            // would actually be uploaded (full-length names, one per package).
-            int c = 0;
-            for (java.util.Map.Entry<String, String> en2 : pkgRep.entrySet()) {
-                Log.i(TAG, "clsdump-poc: rep[" + c + "] " + en2.getValue());
-                if (++c >= 60) break;
-            }
         } catch (Throwable t) {
-            Log.e(TAG, "clsdump-poc: enumeration FAILED at total=" + total + " : " + t);
+            Log.e(TAG, "clsdump: enumeration failed at total=" + total + " : " + t);
+            // Fall through: report whatever was collected before the failure.
         }
+
+        // Feed representatives into the existing loaded_class pipeline. _lcSeen dedup
+        // avoids re-sending classes the passive hook already reported.
+        int queued = 0;
+        for (String rep : pkgRep.values()) {
+            if (_lcSeen.putIfAbsent(rep, Boolean.TRUE) != null) continue;
+            boolean doFlush = false;
+            synchronized (_lcBatch) {
+                _lcBatch.add(rep);
+                if (_lcBatchStartMs == 0) _lcBatchStartMs = System.currentTimeMillis();
+                if (_lcBatch.size() >= LC_BATCH_SIZE) doFlush = true;
+            }
+            if (doFlush) lcFlush();
+            queued++;
+        }
+        lcFlush();  // flush the tail
+        Log.i(TAG, "clsdump: total=" + total + " kept=" + kept
+                + " packages=" + pkgRep.size() + " reported=" + queued);
     }
 
     // TelephonyManager.getDeviceId()  instance: args={thiz}
