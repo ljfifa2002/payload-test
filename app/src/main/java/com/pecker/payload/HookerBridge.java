@@ -569,10 +569,110 @@ public class HookerBridge {
                         }
                     }
                     if (doFlush) lcFlush();
+
+                    // PoC (verify-only): the first non-system class means the shell has
+                    // decrypted and is loading real app classes. Schedule ONE delayed
+                    // full-dex enumeration of THIS ClassLoader and only log the result —
+                    // no reporting, no hooks. Validates whether DexFile.entries() works
+                    // under hidden-API restrictions before building the real feature.
+                    if (args[0] instanceof ClassLoader
+                            && sClassDumpScheduled.compareAndSet(false, true)) {
+                        final ClassLoader cl = (ClassLoader) args[0];
+                        new Thread(() -> {
+                            try { Thread.sleep(8000); } catch (InterruptedException ignored2) {}
+                            dumpClassesPoc(cl);
+                        }, "pecker-clsdump-poc").start();
+                    }
                 }
             }
         } catch (Exception ignored) {}
         return result;
+    }
+
+    // ---- PoC (verify-only): full-dex class enumeration under hidden-API limits ----
+    // One-shot guard so the delayed dump runs a single time.
+    private static final java.util.concurrent.atomic.AtomicBoolean sClassDumpScheduled =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+
+    /**
+     * PoC: enumerate ALL classes DEFINED in the dex files reachable from {@code cl}
+     * (not just runtime-loaded ones), via reflection into
+     * BaseDexClassLoader.pathList → DexPathList.dexElements[].dexFile → DexFile.entries().
+     *
+     * These are Android 9+ hidden APIs; the payload dex runs in app context and is
+     * subject to hidden-API enforcement. We first attempt a blanket exemption via
+     * VMRuntime.setHiddenApiExemptions(["L"]) (itself reached by double reflection).
+     *
+     * Logs ONLY: total classes found and the first 40 names. No reporting, no hooks.
+     * Success criterion (logcat -s payload): "clsdump-poc: total=NNNN" with NNNN large
+     * and third-party SDK internal classes present.
+     */
+    private static void dumpClassesPoc(ClassLoader cl) {
+        // Step 1 — try to exempt all hidden APIs for this process.
+        try {
+            Class<?> vmRuntimeCls = Class.forName("dalvik.system.VMRuntime");
+            Method getRuntime = vmRuntimeCls.getDeclaredMethod("getRuntime");
+            getRuntime.setAccessible(true);
+            Object vmRuntime = getRuntime.invoke(null);
+            Method setExemptions = vmRuntimeCls.getDeclaredMethod(
+                    "setHiddenApiExemptions", String[].class);
+            setExemptions.setAccessible(true);
+            setExemptions.invoke(vmRuntime, (Object) new String[]{"L"});
+            Log.i(TAG, "clsdump-poc: hidden-api exemption applied");
+        } catch (Throwable t) {
+            Log.w(TAG, "clsdump-poc: hidden-api exemption FAILED: " + t);
+            // Continue anyway — on some ROMs entries() may still work.
+        }
+
+        int total = 0;
+        int logged = 0;
+        try {
+            // BaseDexClassLoader.pathList
+            Class<?> bdcl = Class.forName("dalvik.system.BaseDexClassLoader");
+            java.lang.reflect.Field fPathList = bdcl.getDeclaredField("pathList");
+            fPathList.setAccessible(true);
+            Object pathList = fPathList.get(cl);
+            if (pathList == null) {
+                Log.w(TAG, "clsdump-poc: pathList null for cl=" + cl.getClass().getName());
+                return;
+            }
+            // DexPathList.dexElements
+            java.lang.reflect.Field fElems = pathList.getClass().getDeclaredField("dexElements");
+            fElems.setAccessible(true);
+            Object[] elements = (Object[]) fElems.get(pathList);
+            if (elements == null) {
+                Log.w(TAG, "clsdump-poc: dexElements null");
+                return;
+            }
+            Log.i(TAG, "clsdump-poc: dexElements count=" + elements.length
+                    + " cl=" + cl.getClass().getName());
+            // Element.dexFile
+            for (Object element : elements) {
+                if (element == null) continue;
+                java.lang.reflect.Field fDexFile = element.getClass().getDeclaredField("dexFile");
+                fDexFile.setAccessible(true);
+                Object dexFile = fDexFile.get(element);
+                if (dexFile == null) continue;
+                // DexFile.entries() -> Enumeration<String> of class names
+                Method entries = dexFile.getClass().getDeclaredMethod("entries");
+                entries.setAccessible(true);
+                Object en = entries.invoke(dexFile);
+                if (!(en instanceof java.util.Enumeration)) continue;
+                java.util.Enumeration<?> e = (java.util.Enumeration<?>) en;
+                while (e.hasMoreElements()) {
+                    Object o = e.nextElement();
+                    if (!(o instanceof String)) continue;
+                    total++;
+                    if (logged < 40) {
+                        Log.i(TAG, "clsdump-poc: [" + logged + "] " + o);
+                        logged++;
+                    }
+                }
+            }
+            Log.i(TAG, "clsdump-poc: total=" + total);
+        } catch (Throwable t) {
+            Log.e(TAG, "clsdump-poc: enumeration FAILED at total=" + total + " : " + t);
+        }
     }
 
     // TelephonyManager.getDeviceId()  instance: args={thiz}
