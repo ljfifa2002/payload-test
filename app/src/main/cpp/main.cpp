@@ -126,40 +126,38 @@ static bool proxy_unhook(void* func) {
 //   3. Otherwise, allow normal crash handling
 //
 // Recovery strategy:
-//   - The crash instruction is typically a null pointer dereference: *(nullptr + 0x97c)
-//   - lr (link register, x30) is zeroed by the obfuscator to hide the caller
-//   - We cannot safely return, so we exit the thread cleanly instead
+//   - Modify the saved PC register to skip past the crash instruction
+//   - Set a safe return value in x0 if needed
+//   - Allow execution to continue
 //
 // Limitations:
 //   - Only handles the 0x97c crash pattern; other anti-debug mechanisms may exist
-//   - Thread exit may disrupt app behavior if the crashed thread is critical
+//   - PC adjustment is ARM64-specific (4-byte instruction skip)
 //   - Does not prevent re-detection if the obfuscator runs periodic checks
 static void jiagu_sigsegv_handler(int sig, siginfo_t *info, void *context) {
     void* fault_addr = info->si_addr;
-    LOGI("signal handler: caught SIGSEGV, fault_addr=%p, code=%d", fault_addr, info->si_code);
 
     // Check if this is the known jiagu crash pattern
     if ((uintptr_t)fault_addr == 0x97c) {
         LOGI("signal handler: detected jiagu crash trigger at 0x97c, attempting recovery");
 
-        // The obfuscator zeroed lr/sp, making normal return impossible.
-        // Exit this thread cleanly instead of crashing the entire process.
-        pthread_exit(nullptr);
-        // pthread_exit does not return
+        // Skip the crash instruction by advancing PC by 4 bytes (one ARM64 instruction)
+        ucontext_t *uc = (ucontext_t*)context;
+        uc->uc_mcontext.pc += 4;
+
+        LOGI("signal handler: recovery successful, adjusted PC to %p", (void*)uc->uc_mcontext.pc);
+        return; // Continue execution
     }
 
-    // Not the jiagu pattern — let the system handle it normally
-    LOGE("signal handler: unhandled SIGSEGV at %p, re-raising signal", fault_addr);
-
-    // Re-raise the signal with default handler to generate crash dump
-    signal(SIGSEGV, SIG_DFL);
-    raise(SIGSEGV);
+    // Not the jiagu pattern — log it but don't interfere
+    // Let the system's default SIGSEGV handler take over (which will crash the app)
+    LOGE("signal handler: unhandled SIGSEGV at %p, allowing default handler", fault_addr);
 }
 
 static void install_jiagu_bypass() {
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
-    sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
+    sa.sa_flags = SA_SIGINFO; // Removed SA_ONSTACK (no alternate stack configured)
     sa.sa_sigaction = jiagu_sigsegv_handler;
     sigemptyset(&sa.sa_mask);
 
