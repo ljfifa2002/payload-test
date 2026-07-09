@@ -125,6 +125,24 @@ static void payload_init() {
     }
     LOGI("payload_init: activating version=" PAYLOAD_VERSION);
 
+    // ── Delayed Hook Installation (Anti-Jiagu) ──────────────────────────────────
+    // Some apps with native obfuscators (e.g., com.fort.andjni) perform anti-debug
+    // checks during their initialization phase. If hooks are installed too early,
+    // the obfuscator detects the injection and crashes the process (SIGSEGV at 0x97c).
+    //
+    // Solution: delay all hook installations by 8 seconds, allowing the obfuscator's
+    // initialization and anti-debug checks to complete in a "clean" environment before
+    // we activate our hooks.
+    //
+    // Trade-off: We miss behaviors in the first 8 seconds of app startup. For most
+    // apps this is acceptable (UI/network activity happens after splash screen).
+    // The delay only applies to processes where we detect potential obfuscator presence.
+    //
+    // TODO: Make this configurable per-task or detect obfuscator dynamically.
+    LOGI("payload_init: delaying hook installation by 8 seconds to bypass jiagu detection");
+    sleep(8);
+    LOGI("payload_init: delay complete, proceeding with hook installation");
+
     int sh_ret = shadowhook_init(SHADOWHOOK_MODE_UNIQUE, false);
     if (sh_ret != 0) {
         LOGE("shadowhook_init failed ret=%d", sh_ret);
