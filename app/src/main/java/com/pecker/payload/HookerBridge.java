@@ -851,19 +851,22 @@ public class HookerBridge {
     }
 
     // ApplicationPackageManager.getPackageInfo(String, int)  args={thiz, pkg, flags}
-    public Object hookGetPackageInfo(Object[] args) {
+    // TRANSPARENT to exceptions: getPackageInfo throws NameNotFoundException when the
+    // queried package is absent. Callers branch on that exception (e.g. WeChat opensdk's
+    // validateAppSignatureForPackage catches NameNotFoundException → "not installed";
+    // on a non-exception null return it reads packageInfo.signatures → NPE crashes the
+    // host). Swallowing the throw to null (safeInvokeObject) breaks them — must re-throw.
+    public Object hookGetPackageInfo(Object[] args) throws Throwable {
         String pkg = args[1] != null ? args[1].toString() : "";
-        Object v = backupGetPackageInfo != null
-                ? safeInvokeObject(backupGetPackageInfo, args[0], args[1], args[2]) : null;
         if (!pkg.isEmpty() && !pkg.equals(ownPackage())) log(Obf.s("PackageManager.getPackageInfo"), pkg);
-        return v;
+        return backupGetPackageInfo != null
+                ? invokeOrRethrow(backupGetPackageInfo, args[0], args[1], args[2]) : null;
     }
-    public Object hookGetApplicationInfo(Object[] args) {
+    public Object hookGetApplicationInfo(Object[] args) throws Throwable {
         String pkg = args[1] != null ? args[1].toString() : "";
-        Object v = backupGetApplicationInfo != null
-                ? safeInvokeObject(backupGetApplicationInfo, args[0], args[1], args[2]) : null;
         if (!pkg.isEmpty() && !pkg.equals(ownPackage())) log(Obf.s("PackageManager.getApplicationInfo"), pkg);
-        return v;
+        return backupGetApplicationInfo != null
+                ? invokeOrRethrow(backupGetApplicationInfo, args[0], args[1], args[2]) : null;
     }
     // queryIntentActivities(Intent, int) / resolveActivity(Intent, int) — app discovery by intent.
     public Object hookQueryIntentActivities(Object[] args) {
