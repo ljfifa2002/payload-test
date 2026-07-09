@@ -7,6 +7,9 @@
 #include <functional>
 #include <string>
 #include <string_view>
+#include <signal.h>
+#include <setjmp.h>
+#include <ucontext.h>
 #include <shadowhook.h>
 #include <lsplant.hpp>
 #include "hooks.h"
@@ -114,6 +117,60 @@ static bool proxy_unhook(void* func) {
     return true;
 }
 
+// ── Anti-Jiagu Signal Handler ───────────────────────────────────────────────
+// Some apps with native obfuscators (e.g., com.fort.andjni) trigger deliberate
+// crashes (SIGSEGV at fault_addr=0x97c) when they detect hook frameworks.
+// This handler intercepts the crash and attempts recovery by:
+//   1. Logging the fault address for analysis
+//   2. If it's the known jiagu crash address (0x97c), skip the crash instruction
+//   3. Otherwise, allow normal crash handling
+//
+// Recovery strategy:
+//   - The crash instruction is typically a null pointer dereference: *(nullptr + 0x97c)
+//   - lr (link register, x30) is zeroed by the obfuscator to hide the caller
+//   - We cannot safely return, so we exit the thread cleanly instead
+//
+// Limitations:
+//   - Only handles the 0x97c crash pattern; other anti-debug mechanisms may exist
+//   - Thread exit may disrupt app behavior if the crashed thread is critical
+//   - Does not prevent re-detection if the obfuscator runs periodic checks
+static void jiagu_sigsegv_handler(int sig, siginfo_t *info, void *context) {
+    void* fault_addr = info->si_addr;
+    LOGI("signal handler: caught SIGSEGV, fault_addr=%p, code=%d", fault_addr, info->si_code);
+
+    // Check if this is the known jiagu crash pattern
+    if ((uintptr_t)fault_addr == 0x97c) {
+        LOGI("signal handler: detected jiagu crash trigger at 0x97c, attempting recovery");
+
+        // The obfuscator zeroed lr/sp, making normal return impossible.
+        // Exit this thread cleanly instead of crashing the entire process.
+        pthread_exit(nullptr);
+        // pthread_exit does not return
+    }
+
+    // Not the jiagu pattern — let the system handle it normally
+    LOGE("signal handler: unhandled SIGSEGV at %p, re-raising signal", fault_addr);
+
+    // Re-raise the signal with default handler to generate crash dump
+    signal(SIGSEGV, SIG_DFL);
+    raise(SIGSEGV);
+}
+
+static void install_jiagu_bypass() {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
+    sa.sa_sigaction = jiagu_sigsegv_handler;
+    sigemptyset(&sa.sa_mask);
+
+    if (sigaction(SIGSEGV, &sa, nullptr) != 0) {
+        LOGE("install_jiagu_bypass: sigaction failed, errno=%d", errno);
+        return;
+    }
+
+    LOGI("install_jiagu_bypass: SIGSEGV handler installed");
+}
+
 __attribute__((constructor))
 static void payload_init() {
     if (!should_activate()) {
@@ -125,23 +182,8 @@ static void payload_init() {
     }
     LOGI("payload_init: activating version=" PAYLOAD_VERSION);
 
-    // ── Delayed Hook Installation (Anti-Jiagu) ──────────────────────────────────
-    // Some apps with native obfuscators (e.g., com.fort.andjni) perform anti-debug
-    // checks during their initialization phase. If hooks are installed too early,
-    // the obfuscator detects the injection and crashes the process (SIGSEGV at 0x97c).
-    //
-    // Solution: delay all hook installations by 8 seconds, allowing the obfuscator's
-    // initialization and anti-debug checks to complete in a "clean" environment before
-    // we activate our hooks.
-    //
-    // Trade-off: We miss behaviors in the first 8 seconds of app startup. For most
-    // apps this is acceptable (UI/network activity happens after splash screen).
-    // The delay only applies to processes where we detect potential obfuscator presence.
-    //
-    // TODO: Make this configurable per-task or detect obfuscator dynamically.
-    LOGI("payload_init: delaying hook installation by 8 seconds to bypass jiagu detection");
-    sleep(8);
-    LOGI("payload_init: delay complete, proceeding with hook installation");
+    // Install signal handler BEFORE any hook initialization
+    install_jiagu_bypass();
 
     int sh_ret = shadowhook_init(SHADOWHOOK_MODE_UNIQUE, false);
     if (sh_ret != 0) {
