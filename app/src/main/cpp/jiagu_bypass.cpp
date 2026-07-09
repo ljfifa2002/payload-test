@@ -96,17 +96,6 @@ static int fake_pthread_kill(pthread_t thread, int sig) {
     return BYTEHOOK_CALL_PREV(fake_pthread_kill, thread, sig);
 }
 
-// ── Hook: ptrace() ───────────────────────────────────────────────────────────
-// Fake ptrace unavailability to block tracer detection.
-// Obfuscators call ptrace(PTRACE_TRACEME) to detect if the app is being debugged.
-static long (*orig_ptrace)(int request, ...) = nullptr;
-
-static long fake_ptrace(int request, ...) {
-    LOGI("bytehook: blocked jiagu ptrace detection: request=%d", request);
-    errno = EPERM;
-    return -1; // Pretend ptrace is not available
-}
-
 // ── Installation ─────────────────────────────────────────────────────────────
 int install_jiagu_bypass_hooks() {
     LOGI("bytehook: installing jiagu bypass hooks");
@@ -139,11 +128,6 @@ int install_jiagu_bypass_hooks() {
     stub = bytehook_hook_all(nullptr, "pthread_kill", (void*)fake_pthread_kill, nullptr, nullptr);
     if (stub == nullptr) {
         LOGE("bytehook: failed to hook pthread_kill()");
-    }
-
-    stub = bytehook_hook_all(nullptr, "ptrace", (void*)fake_ptrace, nullptr, nullptr);
-    if (stub == nullptr) {
-        LOGE("bytehook: failed to hook ptrace()");
     }
 
     LOGI("bytehook: jiagu bypass hooks installed successfully");

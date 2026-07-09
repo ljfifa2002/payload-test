@@ -133,7 +133,10 @@ static void payload_init() {
     //   3. We intercept the obfuscator's detection functions before it runs
     //
     // Hooked functions: open/openat (block /proc/self/maps reading),
-    //                   kill/pthread_kill (block suicide), ptrace (fake unavailable)
+    //                   kill/pthread_kill (block suicide)
+    //
+    // Note: ptrace is NOT hooked to avoid blocking peckerd's PTRACE_ATTACH during
+    // injection (bytehook_hook_all affects all processes including peckerd itself).
     if (install_jiagu_bypass_hooks() != 0) {
         LOGE("payload_init: jiagu bypass installation failed, continuing anyway");
         // Continue even if bypass fails — better to try than give up

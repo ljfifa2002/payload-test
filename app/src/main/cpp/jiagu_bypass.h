@@ -8,7 +8,9 @@
 // Hooked functions:
 //   - open/openat: block access to /proc/self/maps (hide injected libraries)
 //   - kill/pthread_kill: block suicide attempts
-//   - ptrace: fake unavailability to block tracer detection
+//
+// Note: ptrace hook is intentionally NOT included to avoid blocking peckerd's
+// PTRACE_ATTACH to zygote during injection.
 //
 // Returns: 0 on success, -1 on failure (logged).
 int install_jiagu_bypass_hooks();
