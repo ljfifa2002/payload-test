@@ -41,5 +41,5 @@ android {
 dependencies {
     // LSPlant removed from prefab — imported manually as prebuilt in CMakeLists.txt
     implementation("com.bytedance.android:shadowhook:1.0.9")
-    implementation("com.bytedance.android:bytehook:1.0.11")
+    implementation("com.bytedance:bytehook:1.1.2")
 }
