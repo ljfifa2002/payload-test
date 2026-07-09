@@ -12,6 +12,7 @@
 #include "hooks.h"
 #include "art_hooks.h"
 #include "ssl_hooks.h"
+#include "jiagu_bypass.h"
 
 #define TAG "payload"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
@@ -125,6 +126,20 @@ static void payload_init() {
     }
     LOGI("payload_init: activating version=" PAYLOAD_VERSION);
 
+    // ── Phase 1: Install ByteHook PLT hooks to bypass obfuscator detection ──────
+    // This MUST run before shadowhook_init() and lsplant::Init() because:
+    //   1. Obfuscators detect inline hooks by scanning memory or checking integrity
+    //   2. PLT hooks are stealthier (only modify GOT pointers, not code)
+    //   3. We intercept the obfuscator's detection functions before it runs
+    //
+    // Hooked functions: open/openat (block /proc/self/maps reading),
+    //                   kill/pthread_kill (block suicide), ptrace (fake unavailable)
+    if (install_jiagu_bypass_hooks() != 0) {
+        LOGE("payload_init: jiagu bypass installation failed, continuing anyway");
+        // Continue even if bypass fails — better to try than give up
+    }
+
+    // ── Phase 2: Initialize ShadowHook (inline hook framework) ──────────────────
     int sh_ret = shadowhook_init(SHADOWHOOK_MODE_UNIQUE, false);
     if (sh_ret != 0) {
         LOGE("shadowhook_init failed ret=%d", sh_ret);

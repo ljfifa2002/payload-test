@@ -27,7 +27,7 @@ android {
     }
 
     buildFeatures {
-        prefab = true  // still needed for shadowhook
+        prefab = true  // needed for shadowhook and bytehook
     }
 
     externalNativeBuild {
@@ -41,4 +41,5 @@ android {
 dependencies {
     // LSPlant removed from prefab — imported manually as prebuilt in CMakeLists.txt
     implementation("com.bytedance.android:shadowhook:1.0.9")
+    implementation("com.bytedance.android:bytehook:1.0.11")
 }
