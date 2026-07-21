@@ -69,6 +69,8 @@ static const char* const kDisabledHooks[] = {
     "hookFileOutputStreamStrAppend",
     "hookFileOutputStreamFile",
     "hookFileOutputStreamFileAppend",
+    "hookGetRootInActiveWindow",        // accessibility 主动读屏 已禁用 - 2026-07-21
+    "hookAccessibilityEventGetText",    // accessibility 被动事件 已禁用 - 2026-07-21
     nullptr,   // ← 占位，勿删；在此行上方按需添加 "hookXxx",
 };
 static bool hook_enabled(const char* callback_name) {
