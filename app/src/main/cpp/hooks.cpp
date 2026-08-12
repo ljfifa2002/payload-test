@@ -71,6 +71,9 @@ static const char* const kDisabledHooks[] = {
     "hookFileOutputStreamFileAppend",
     "hookGetRootInActiveWindow",        // accessibility 主动读屏 已禁用 - 2026-07-21
     "hookAccessibilityEventGetText",    // accessibility 被动事件 已禁用 - 2026-07-21
+    "hookCertificatePinnerCheck",       // SSL pinning 绕过 已禁用 - 2026-08-11
+    "hookSslContextInit",               // SSL pinning 绕过 已禁用 - 2026-08-11
+    "hookSetDefaultHostnameVerifier",   // SSL pinning 绕过 已禁用 - 2026-08-11
     nullptr,   // ← 占位，勿删；在此行上方按需添加 "hookXxx",
 };
 static bool hook_enabled(const char* callback_name) {
@@ -463,6 +466,18 @@ void install_device_id_hooks(JNIEnv* env) {
         "java/net/NetworkInterface", "getHardwareAddress", "()[B",
         "hookGetHardwareAddress", kCbSig, "backupNetworkInterfaceGetHardwareAddress", false);
 
+    // NetworkInterface.getInetAddresses() — 枚举本机所有 IP 地址
+    hook_one(env, hooker_obj, hooker_class,
+        "java/net/NetworkInterface", "getInetAddresses",
+        "()Ljava/util/Enumeration;",
+        "hookGetInetAddresses", kCbSig, "backupGetInetAddresses", false);
+
+    // ConnectivityManager.getAllNetworkInfo() — 枚举所有网络信息（含SSID via getExtraInfo）
+    hook_one(env, hooker_obj, hooker_class,
+        "android/net/ConnectivityManager", "getAllNetworkInfo",
+        "()[Landroid/net/NetworkInfo;",
+        "hookGetAllNetworkInfo", kCbSig, "backupGetAllNetworkInfo", false);
+
     hook_one(env, hooker_obj, hooker_class,
         "android/app/Activity", "onCreate", "(Landroid/os/Bundle;)V",
         "hookActivityOnCreate", kCbSig, "backupActivityOnCreate", false);
@@ -597,6 +612,16 @@ void install_device_id_hooks(JNIEnv* env) {
         "android/content/ContextWrapper", "startActivity",
         "(Landroid/content/Intent;Landroid/os/Bundle;)V",
         "hookContextStartActivityWithOptions", kCbSig, "backupContextStartActivityWithOptions", false);
+
+    // MediaRecorder.setAudioSource — 检测录音源设置（比 start() 更早）
+    hook_one(env, hooker_obj, hooker_class,
+        "android/media/MediaRecorder", "setAudioSource", "(I)V",
+        "hookMediaRecorderSetAudioSource", kCbSig, "backupMediaRecorderSetAudioSource", false);
+
+    // MediaRecorder.setVideoSource — 检测录像源设置
+    hook_one(env, hooker_obj, hooker_class,
+        "android/media/MediaRecorder", "setVideoSource", "(I)V",
+        "hookMediaRecorderSetVideoSource", kCbSig, "backupMediaRecorderSetVideoSource", false);
 
     hook_one(env, hooker_obj, hooker_class,
         "android/media/MediaRecorder", "start", "()V",
@@ -868,6 +893,10 @@ void install_device_id_hooks(JNIEnv* env) {
     hook_one(env, hooker_obj, hooker_class,
         "android/telephony/SubscriptionManager", "getActiveSubscriptionInfoList", "()Ljava/util/List;",
         "hookGetActiveSubscriptionInfoList", kCbSig, "backupGetActiveSubscriptionInfoList", false, false, true);
+    // SubscriptionInfo.getIccId() — 独立 hook，覆盖单对象路径（getActiveSubscriptionInfo 单数版拿对象后再读ICCID）
+    hook_one(env, hooker_obj, hooker_class,
+        "android/telephony/SubscriptionInfo", "getIccId", "()Ljava/lang/String;",
+        "hookGetIccId", kCbSig, "backupGetIccId", false);
 
     hook_one(env, hooker_obj, hooker_class,
         "android/net/wifi/WifiInfo", "getSSID",
@@ -941,11 +970,23 @@ void install_device_id_hooks(JNIEnv* env) {
         "hookHealthConnectReadRecords", kCbSig,
         "backupHealthConnectReadRecords", false, true, true);
 
+    // ActivityRecognitionClient.requestActivityUpdates — GMS运动状态识别，optional
+    hook_one(env, hooker_obj, hooker_class,
+        "com/google/android/gms/location/ActivityRecognitionClient", "requestActivityUpdates",
+        "(JLandroid/app/PendingIntent;)Lcom/google/android/gms/tasks/Task;",
+        "hookActivityRecognitionRequestUpdates", kCbSig,
+        "backupActivityRecognitionRequestUpdates", false, false, true);
+
     // getSystemService filtered on "media_projection" only
     hook_one(env, hooker_obj, hooker_class,
         "android/content/ContextWrapper", "getSystemService",
         "(Ljava/lang/String;)Ljava/lang/Object;",
         "hookGetSystemService", kCbSig, "backupGetSystemService", false);
+
+    // Display.getRotation() — 屏幕方向，设备指纹辅助向量
+    hook_one(env, hooker_obj, hooker_class,
+        "android/view/Display", "getRotation", "()I",
+        "hookDisplayGetRotation", kCbSig, "backupDisplayGetRotation", false);
 
     // 实际录屏：MediaProjection.createVirtualDisplay（8参公有重载，开始抓帧）。归 screen。
     hook_one(env, hooker_obj, hooker_class,
@@ -957,6 +998,16 @@ void install_device_id_hooks(JNIEnv* env) {
         "android/media/projection/MediaProjectionManager", "createScreenCaptureIntent",
         "()Landroid/content/Intent;",
         "hookCreateScreenCaptureIntent", kCbSig, "backupCreateScreenCaptureIntent", false, false, true);
+
+    // SurfaceControl.screenshot — Native截屏（隐藏API），optional
+    hook_one(env, hooker_obj, hooker_class,
+        "android/view/SurfaceControl", "screenshot",
+        "(Landroid/graphics/Rect;IIIIZI)Landroid/graphics/Bitmap;",
+        "hookSurfaceControlScreenshot", kCbSig, "backupSurfaceControlScreenshot", false, false, true);
+    hook_one(env, hooker_obj, hooker_class,
+        "android/view/SurfaceControl", "screenshot",
+        "(Landroid/graphics/Rect;III)Landroid/graphics/Bitmap;",
+        "hookSurfaceControlScreenshot", kCbSig, "backupSurfaceControlScreenshot", false, false, true);
 
     // 无障碍·主动读屏：AccessibilityService.getRootInActiveWindow()（基类具体方法，子类继承→挂基类即全覆盖）。
     // 归 accessibility；可被循环调用，agent 侧 dedupFlags(accessibility) 500ms 限频。
@@ -1011,6 +1062,14 @@ void install_device_id_hooks(JNIEnv* env) {
         "com/tencent/map/geolocation/TencentLocationManager", "requestLocationUpdates",
         "(Lcom/tencent/map/geolocation/TencentLocationRequest;Lcom/tencent/map/geolocation/TencentLocationListener;)I",
         "hookTencentLocationStart", kCbSig, "backupTencentLocationStart", false, true);
+
+    // TencentLocationManager.requestSingleFreshLocation — optional (SDK)
+    hook_one(env, hooker_obj, hooker_class,
+        "com/tencent/map/geolocation/TencentLocationManager", "requestSingleFreshLocation",
+        "(Lcom/tencent/map/geolocation/TencentLocationRequest;"
+        "Lcom/tencent/map/geolocation/TencentLocationListener;"
+        "Landroid/os/Looper;)I",
+        "hookTencentLocationSingleFresh", kCbSig, "backupTencentLocationSingleFresh", false, true);
 
     // Phase 11: WebView privacy policy capture via title recognition
     // loadUrl: store WebView→URL mapping (unconditional, no keyword filter)

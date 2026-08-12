@@ -236,6 +236,7 @@ public class HookerBridge {
     public Method backupBleStartScanFilters;
     public Method backupWifiGetConfiguredNetworks;
     public Method backupGetActiveSubscriptionInfoList;
+    public Method backupGetIccId;                              // SubscriptionInfo.getIccId()
     public Method backupCreateVirtualDisplay;
     public Method backupCreateScreenCaptureIntent;
     public Method backupGetRootInActiveWindow;
@@ -248,7 +249,9 @@ public class HookerBridge {
     public Method backupContextCompatCheckSelfPermission;
     public Method backupPackageManagerCheckPermission;   // A.2: PackageManager.checkPermission(perm,pkg)
     public Method backupHealthConnectReadRecords;         // A.3: HealthConnect readRecords (use_app_cl)
+    public Method backupActivityRecognitionRequestUpdates; // GMS ActivityRecognition
     public Method backupGetSystemService;
+    public Method backupDisplayGetRotation;              // Display.getRotation()
     // Phase 8: third-party location SDKs (optional)
     public Method backupBaiduLocationStart;
     public Method backupAmapLocationStart;
@@ -260,6 +263,20 @@ public class HookerBridge {
     public Method backupFileOutputStreamFile;
     public Method backupFileOutputStreamFileAppend;
     public Method backupTencentLocationStart;
+    public Method backupTencentLocationSingleFresh;
+
+    // MediaRecorder setAudioSource / setVideoSource — 录音/录像源设置
+    public Method backupMediaRecorderSetAudioSource;
+    public Method backupMediaRecorderSetVideoSource;
+
+    // NetworkInterface.getInetAddresses() — 枚举本机所有IP
+    public Method backupGetInetAddresses;
+
+    // ConnectivityManager.getAllNetworkInfo() — 枚举所有网络信息
+    public Method backupGetAllNetworkInfo;
+
+    // SurfaceControl.screenshot() — Native截屏
+    public Method backupSurfaceControlScreenshot;
     // Phase 11: WebView privacy policy capture via title recognition
     public Method backupWebViewLoadUrl;
     public Method backupWebChromeClientOnReceivedTitle;
@@ -709,28 +726,28 @@ public class HookerBridge {
     public Object hookGetDeviceId(Object[] args) {
         Object thiz = args[0];
         String v = backupGetDeviceId != null ? safeInvoke(backupGetDeviceId, thiz) : null;
-        log(Obf.s("getDeviceId"), v != null ? v : "");
+        log(Obf.s("TelephonyManager.getDeviceId"), v != null ? v : "");
         return v;
     }
 
     public Object hookGetSubscriberId(Object[] args) {
         Object thiz = args[0];
         String v = backupGetSubscriberId != null ? safeInvoke(backupGetSubscriberId, thiz) : null;
-        log(Obf.s("getSubscriberId"), v != null ? v : "");
+        log(Obf.s("TelephonyManager.getSubscriberId"), v != null ? v : "");
         return v;
     }
 
     public Object hookGetSimSerialNumber(Object[] args) {
         Object thiz = args[0];
         String v = backupGetSimSerialNumber != null ? safeInvoke(backupGetSimSerialNumber, thiz) : null;
-        log(Obf.s("getSimSerialNumber"), v != null ? v : "");
+        log(Obf.s("TelephonyManager.getSimSerialNumber"), v != null ? v : "");
         return v;
     }
 
     public Object hookGetLine1Number(Object[] args) {
         Object thiz = args[0];
         String v = backupGetLine1Number != null ? safeInvoke(backupGetLine1Number, thiz) : null;
-        log(Obf.s("getLine1Number"), v != null ? v : "");
+        log(Obf.s("TelephonyManager.getLine1Number"), v != null ? v : "");
         return v;
     }
 
@@ -765,7 +782,7 @@ public class HookerBridge {
     }
     public Object hookGetDeviceIdSlot(Object[] args) {
         Object v = backupGetDeviceIdSlot != null ? safeInvokeObject(backupGetDeviceIdSlot, args[0], args[1]) : null;
-        log(Obf.s("getDeviceId"), v instanceof String ? (String) v : "");
+        log(Obf.s("TelephonyManager.getDeviceId"), v instanceof String ? (String) v : "");
         return v;
     }
     // Build.getSerial() — static, API 26+, needs READ_PHONE_STATE.
@@ -1014,8 +1031,24 @@ public class HookerBridge {
     public Object hookGetMacAddress(Object[] args) {
         Object thiz = args[0];
         String v = backupWifiGetMacAddress != null ? safeInvoke(backupWifiGetMacAddress, thiz) : null;
-        log(Obf.s("getMacAddress"), v != null ? v : "");
+        log(Obf.s("WifiInfo.getMacAddress"), v != null ? v : "");
         return v;
+    }
+
+    // NetworkInterface.getInetAddresses()  instance: args={thiz}
+    public Object hookGetInetAddresses(Object[] args) {
+        log(Obf.s("NetworkInterface.getInetAddresses"), "");
+        return backupGetInetAddresses != null
+                ? safeInvokeObject(backupGetInetAddresses, args[0])
+                : null;
+    }
+
+    // ConnectivityManager.getAllNetworkInfo()  instance: args={thiz}
+    public Object hookGetAllNetworkInfo(Object[] args) {
+        log(Obf.s("ConnectivityManager.getAllNetworkInfo"), "");
+        return backupGetAllNetworkInfo != null
+                ? safeInvokeObject(backupGetAllNetworkInfo, args[0])
+                : null;
     }
 
     public Object hookGetHardwareAddress(Object[] args) {
@@ -1029,7 +1062,7 @@ public class HookerBridge {
                 if (i > 0) sb.append(':');
                 sb.append(String.format("%02x", v[i] & 0xff));
             }
-            log(Obf.s("getHardwareAddress"), sb.toString());
+            log(Obf.s("NetworkInterface.getHardwareAddress"), sb.toString());
         }
         return v;
     }
@@ -1551,7 +1584,7 @@ public class HookerBridge {
     // CameraManager.openCamera(String, StateCallback, Handler)  instance: args={thiz, cameraId, cb, handler}
     public Object hookCameraManagerOpenCamera(Object[] args) {
         String cameraId = args[1] != null ? args[1].toString() : "";
-        log(Obf.s("Camera2.openCamera"), cameraId);
+        log(Obf.s("CameraManager.openCamera"), cameraId);
         if (backupCameraManagerOpenCamera != null)
             safeInvokeObject(backupCameraManagerOpenCamera, args[0], args[1], args[2], args[3]);
         return null;
@@ -1825,6 +1858,22 @@ public class HookerBridge {
         try {
             return (String) context.getClass().getMethod("getPackageName").invoke(context);
         } catch (Exception ignored) {}
+        return null;
+    }
+
+    // MediaRecorder.setAudioSource(int)  instance: args={thiz, audioSource}
+    public Object hookMediaRecorderSetAudioSource(Object[] args) {
+        log(Obf.s("MediaRecorder.setAudioSource"), "");
+        if (backupMediaRecorderSetAudioSource != null)
+            safeInvokeObject(backupMediaRecorderSetAudioSource, args[0], args[1]);
+        return null;
+    }
+
+    // MediaRecorder.setVideoSource(int)  instance: args={thiz, videoSource}
+    public Object hookMediaRecorderSetVideoSource(Object[] args) {
+        log(Obf.s("MediaRecorder.setVideoSource"), "");
+        if (backupMediaRecorderSetVideoSource != null)
+            safeInvokeObject(backupMediaRecorderSetVideoSource, args[0], args[1]);
         return null;
     }
 
@@ -2581,11 +2630,19 @@ public class HookerBridge {
     }
 
     // SubscriptionManager.getActiveSubscriptionInfoList() → List<SubscriptionInfo>  instance: args={thiz}.
-    // 现代多卡设备 IMSI/ICCID/号码来源；归 imsi。
+    // 现代多卡设备 IMSI/ICCID/号码来源；归 iccid。
     public Object hookGetActiveSubscriptionInfoList(Object[] args) {
         Object v = backupGetActiveSubscriptionInfoList != null
                 ? safeInvokeObject(backupGetActiveSubscriptionInfoList, args[0]) : null;
         log(Obf.s("SubscriptionManager.getActiveSubscriptionInfoList"), v != null ? "count=" + getListSize(v) : "null");
+        return v;
+    }
+
+    // SubscriptionInfo.getIccId() → String  instance: args={thiz}.
+    // 覆盖单对象路径：App 经 getActiveSubscriptionInfo(单数) 拿对象后再读 ICCID。
+    public Object hookGetIccId(Object[] args) {
+        Object v = backupGetIccId != null ? safeInvokeObject(backupGetIccId, args[0]) : null;
+        log(Obf.s("SubscriptionInfo.getIccId"), v != null ? v.toString() : "null");
         return v;
     }
 
@@ -2607,6 +2664,14 @@ public class HookerBridge {
         log(Obf.s("MediaProjectionManager.createScreenCaptureIntent"), "录屏截屏");
         return backupCreateScreenCaptureIntent != null
                 ? safeInvokeObject(backupCreateScreenCaptureIntent, args[0]) : null;
+    }
+
+    // SurfaceControl.screenshot() — Native截屏（@hide），static
+    public Object hookSurfaceControlScreenshot(Object[] args) {
+        log(Obf.s("SurfaceControl.screenshot"), "");
+        return backupSurfaceControlScreenshot != null
+                ? safeInvokeStatic(backupSurfaceControlScreenshot, args[0], args[1], args[2], args[3], args[4], args[5], args[6])
+                : null;
     }
 
     // AccessibilityService.getRootInActiveWindow() → AccessibilityNodeInfo  instance: args={thiz}
@@ -2772,6 +2837,15 @@ public class HookerBridge {
         return null;
     }
 
+    // ActivityRecognitionClient.requestActivityUpdates(long, PendingIntent)  instance: args={thiz, intervalMs, intent}
+    // GMS API, optional — 设备无GMS时类不存在不会崩溃
+    public Object hookActivityRecognitionRequestUpdates(Object[] args) {
+        log(Obf.s("ActivityRecognitionClient.requestActivityUpdates"), "");
+        if (backupActivityRecognitionRequestUpdates != null)
+            return safeInvokeObject(backupActivityRecognitionRequestUpdates, args[0], args[1], args[2]);
+        return null;
+    }
+
     // ContextWrapper.getSystemService(String)  instance: args={thiz, name}
     // Only log when name is "media_projection" to avoid noise.
     public Object hookGetSystemService(Object[] args) {
@@ -2781,6 +2855,14 @@ public class HookerBridge {
         if (args[1] != null && "media_projection".equals(args[1].toString()))
             log(Obf.s("getSystemService_media_projection"), "");
         return result;
+    }
+
+    // Display.getRotation()  instance: args={thiz}
+    public Object hookDisplayGetRotation(Object[] args) {
+        log(Obf.s("Display.getRotation"), "");
+        return backupDisplayGetRotation != null
+                ? safeInvokeInt(backupDisplayGetRotation, args[0])
+                : 0;
     }
 
     // Baidu LocationClient.start()  instance: args={thiz}
@@ -2878,6 +2960,14 @@ public class HookerBridge {
         log(Obf.s("TencentLocationManager.requestLocationUpdates"), "tencent");
         if (backupTencentLocationStart != null)
             safeInvokeObject(backupTencentLocationStart, args[0], args[1], args[2]);
+        return null;
+    }
+
+    // TencentLocationManager.requestSingleFreshLocation()  instance: args={thiz, request, listener, looper}
+    public Object hookTencentLocationSingleFresh(Object[] args) {
+        log(Obf.s("TencentLocationManager.requestSingleFreshLocation"), "tencent");
+        if (backupTencentLocationSingleFresh != null)
+            safeInvokeObject(backupTencentLocationSingleFresh, args[0], args[1], args[2], args[3]);
         return null;
     }
 
