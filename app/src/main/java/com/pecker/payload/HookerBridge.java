@@ -2666,11 +2666,13 @@ public class HookerBridge {
                 ? safeInvokeObject(backupCreateScreenCaptureIntent, args[0]) : null;
     }
 
-    // SurfaceControl.screenshot() — Native截屏（@hide），static
+    // SurfaceControl.screenshot() — Native截屏（@hide），static。
+    // 两个重载共用本 handler：7参 (Rect;IIIIZI) / 3参 (Rect;III)；
+    // 静态方法 args 无 thiz 前缀，整数组透传按重载自适配参数个数。
     public Object hookSurfaceControlScreenshot(Object[] args) {
         log(Obf.s("SurfaceControl.screenshot"), "");
         return backupSurfaceControlScreenshot != null
-                ? safeInvokeStatic(backupSurfaceControlScreenshot, args[0], args[1], args[2], args[3], args[4], args[5], args[6])
+                ? safeInvokeObject(backupSurfaceControlScreenshot, null, args)
                 : null;
     }
 
@@ -2857,12 +2859,12 @@ public class HookerBridge {
         return result;
     }
 
-    // Display.getRotation()  instance: args={thiz}
+    // Display.getRotation()  instance: args={thiz}，返回 int（autobox→Integer）
     public Object hookDisplayGetRotation(Object[] args) {
         log(Obf.s("Display.getRotation"), "");
         return backupDisplayGetRotation != null
-                ? safeInvokeInt(backupDisplayGetRotation, args[0])
-                : 0;
+                ? safeInvokeObject(backupDisplayGetRotation, args[0])
+                : null;
     }
 
     // Baidu LocationClient.start()  instance: args={thiz}
