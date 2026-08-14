@@ -74,6 +74,7 @@ static const char* const kDisabledHooks[] = {
     "hookCertificatePinnerCheck",       // SSL pinning 绕过 已禁用 - 2026-08-11
     "hookSslContextInit",               // SSL pinning 绕过 已禁用 - 2026-08-11
     "hookSetDefaultHostnameVerifier",   // SSL pinning 绕过 已禁用 - 2026-08-11
+    "hookGetSystemService",             // 录屏入口(media_projection) 已禁用 - 2026-08-12，createScreenCaptureIntent/createVirtualDisplay已覆盖
     nullptr,   // ← 占位，勿删；在此行上方按需添加 "hookXxx",
 };
 static bool hook_enabled(const char* callback_name) {
@@ -869,7 +870,7 @@ void install_device_id_hooks(JNIEnv* env) {
         "(I)Ljava/util/List;",
         "hookGetRunningServices", kCbSig, "backupGetRunningServices", false);
 
-    // ── 2026-06 补充：蓝牙扫描族(bluetoothmac) / 最近任务 / 已配置WiFi(ssid) / 多卡订阅(imsi) ──
+    // ── 2026-06 补充：蓝牙扫描族(bluetooth_scan) / 最近任务 / 已配置WiFi(ssid) / 多卡订阅(imsi) ──
     hook_one(env, hooker_obj, hooker_class,
         "android/app/ActivityManager", "getRecentTasks", "(II)Ljava/util/List;",
         "hookGetRecentTasks", kCbSig, "backupGetRecentTasks", false, false, true);

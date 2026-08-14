@@ -228,7 +228,7 @@ public class HookerBridge {
     public Method backupGetInstalledApplications;
     public Method backupGetRunningTasks;
     public Method backupGetRunningServices;
-    // 2026-06 补充：蓝牙扫描族(bluetoothmac)/最近任务(runningappprocesses)/已配置WiFi(ssid)/多卡订阅(imsi)
+    // 2026-06 补充：蓝牙扫描族(bluetooth_scan)/最近任务(runningappprocesses)/已配置WiFi(ssid)/多卡订阅(imsi)
     public Method backupGetRecentTasks;
     public Method backupBluetoothStartDiscovery;
     public Method backupBluetoothGetBondedDevices;
