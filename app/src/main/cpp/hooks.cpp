@@ -479,6 +479,12 @@ void install_device_id_hooks(JNIEnv* env) {
         "()[Landroid/net/NetworkInfo;",
         "hookGetAllNetworkInfo", kCbSig, "backupGetAllNetworkInfo", false);
 
+    // NetworkInfo.getExtraInfo() — 取网络额外信息（WiFi 返回 SSID）
+    hook_one(env, hooker_obj, hooker_class,
+        "android/net/NetworkInfo", "getExtraInfo",
+        "()Ljava/lang/String;",
+        "hookGetExtraInfo", kCbSig, "backupGetExtraInfo", false, false, true);
+
     hook_one(env, hooker_obj, hooker_class,
         "android/app/Activity", "onCreate", "(Landroid/os/Bundle;)V",
         "hookActivityOnCreate", kCbSig, "backupActivityOnCreate", false);
@@ -553,6 +559,11 @@ void install_device_id_hooks(JNIEnv* env) {
         "android/content/ClipboardManager", "getPrimaryClip",
         "()Landroid/content/ClipData;",
         "hookClipboardGetPrimaryClip", kCbSig, "backupClipboardGetPrimaryClip", false);
+
+    hook_one(env, hooker_obj, hooker_class,
+        "android/content/ClipboardManager", "getText",
+        "()Ljava/lang/CharSequence;",
+        "hookClipboardGetText", kCbSig, "backupClipboardGetText", false, false, true);
 
     hook_one(env, hooker_obj, hooker_class,
         "android/hardware/Camera", "open",

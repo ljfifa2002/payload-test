@@ -180,6 +180,7 @@ public class HookerBridge {
     public Method backupCameraManagerOpenCamera;
     // Phase 4b: clipboard / camera / audio / process / shell / navigation
     public Method backupClipboardGetPrimaryClip;
+    public Method backupClipboardGetText;
     public Method backupCameraOpen0;
     public Method backupCameraOpenInt;
     public Method backupAudioRecordStartRecording;
@@ -274,6 +275,7 @@ public class HookerBridge {
 
     // ConnectivityManager.getAllNetworkInfo() — 枚举所有网络信息
     public Method backupGetAllNetworkInfo;
+    public Method backupGetExtraInfo;
 
     // SurfaceControl.screenshot() — Native截屏
     public Method backupSurfaceControlScreenshot;
@@ -1051,6 +1053,15 @@ public class HookerBridge {
                 : null;
     }
 
+    // NetworkInfo.getExtraInfo()  instance: args={thiz}，WiFi 返回 SSID
+    public Object hookGetExtraInfo(Object[] args) {
+        String v = backupGetExtraInfo != null
+                ? safeInvoke(backupGetExtraInfo, args[0])
+                : null;
+        log(Obf.s("NetworkInfo.getExtraInfo"), v != null ? v : "");
+        return v;
+    }
+
     public Object hookGetHardwareAddress(Object[] args) {
         Object thiz = args[0];
         byte[] v = backupNetworkInterfaceGetHardwareAddress != null
@@ -1635,6 +1646,15 @@ public class HookerBridge {
         log(Obf.s("ClipboardManager.getPrimaryClip"), text);
         log(Obf.s("ClipboardManager.getText"), text);
         return clip;
+    }
+
+    // ClipboardManager.getText()  instance: args={thiz}，旧 API（App 直接调 getText 不经 getPrimaryClip）
+    public Object hookClipboardGetText(Object[] args) {
+        CharSequence v = backupClipboardGetText != null
+                ? (CharSequence) safeInvokeObject(backupClipboardGetText, args[0])
+                : null;
+        log(Obf.s("ClipboardManager.getText"), v != null ? v.toString() : "");
+        return v;
     }
 
     // Camera.open()  static: args={}
