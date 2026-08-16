@@ -75,6 +75,8 @@ static const char* const kDisabledHooks[] = {
     "hookSslContextInit",               // SSL pinning 绕过 已禁用 - 2026-08-11
     "hookSetDefaultHostnameVerifier",   // SSL pinning 绕过 已禁用 - 2026-08-11
     "hookGetSystemService",             // 录屏入口(media_projection) 已禁用 - 2026-08-12，createScreenCaptureIntent/createVirtualDisplay已覆盖
+    "hookLocationGetLatitude",          // 辅助取值 已禁用 - 2026-08-13，getLastKnownLocation已覆盖，报key无config被丢弃
+    "hookLocationGetLongitude",         // 辅助取值 已禁用 - 2026-08-13
     nullptr,   // ← 占位，勿删；在此行上方按需添加 "hookXxx",
 };
 static bool hook_enabled(const char* callback_name) {

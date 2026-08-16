@@ -959,7 +959,7 @@ public class HookerBridge {
     // hook point (the actual getLastLocation() lives on an obfuscated impl). Reports fused-
     // location usage when the app acquires the client.
     public Object hookFusedLocationClient(Object[] args) {
-        log(Obf.s("FusedLocationProviderClient"), "");
+        log(Obf.s("getFusedLocationProviderClient"), "");
         if (backupFusedLocationClient != null) {
             try { return backupFusedLocationClient.invoke(null, args[0]); }
             catch (Exception e) { Log.e(TAG, "backup getFusedLocationProviderClient failed: " + e); }
@@ -1899,7 +1899,7 @@ public class HookerBridge {
 
     // MediaRecorder.start()  instance: args={thiz}
     public Object hookMediaRecorderStart(Object[] args) {
-        log(Obf.s("MediaRecorder.start_audio"), "");
+        log(Obf.s("MediaRecorder.start"), "");
         if (backupMediaRecorderStart != null)
             safeInvokeObject(backupMediaRecorderStart, args[0]);
         return null;
@@ -1915,7 +1915,7 @@ public class HookerBridge {
         }
         if ("android.intent.action.BOOT_COMPLETED".equals(action) ||
                 "android.intent.action.QUICKBOOT_POWERON".equals(action)) {
-            log(Obf.s("BroadcastReceiver.onReceive_BOOT"), action != null ? action : "");
+            log(Obf.s("onReceive"), action != null ? action : "");
         }
         if (backupBroadcastReceiverOnReceive != null)
             safeInvokeObject(backupBroadcastReceiverOnReceive, args[0], args[1], args[2]);
